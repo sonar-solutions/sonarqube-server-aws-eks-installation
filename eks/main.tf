@@ -314,7 +314,7 @@ resource "helm_release" "sonarqube" {
         enabled = true
         hosts = [
           {
-            name        = "sonarqube.${var.cluster_name}.${var.aws_region}.${var.domain_name}"
+            name        = "${var.host_name}.${var.domain_name}"
             path        = "/*"
             serviceName = "sonarqube-sonarqube"
             servicePort = 9000
