@@ -1,0 +1,260 @@
+deploymentType: "StatefulSet"
+edition: "enterprise"
+
+replicaCount: 1
+
+revisionHistoryLimit: 10
+
+# (DEPRECATED) This will use the default deployment strategy unless it is overridden
+deploymentStrategy:
+  type: Recreate
+
+# Set the chart to use the latest released SonarQube Community Build
+community:
+  enabled: false
+  buildNumber: "25.7.0.110598"
+
+image:
+  repository: sonarqube
+  pullPolicy: IfNotPresent
+
+securityContext:
+  fsGroup: 0
+
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop: ["ALL"]
+
+# Settings to configure elasticsearch host requirements
+elasticsearch:
+  # (DEPRECATED) Use initSysctl.enabled instead
+  configureNode: false
+  bootstrapChecks: true
+
+service:
+  type: ClusterIP
+  externalPort: 9000
+  internalPort: 9000
+  labels:
+  annotations: {}
+
+httpProxySecret: ""
+httpProxy: ""
+httpsProxy: ""
+noProxy: ""
+
+# Optionally create Network Policies
+networkPolicy:
+  enabled: false
+  prometheusNamespace: "monitoring"
+
+sonarWebContext: ""
+
+ingress:
+  enabled: false  # Will be overridden to true by Terraform with dynamic values
+
+affinity: {}
+
+tolerations: []
+
+nodeSelector: {}
+
+hostAliases: []
+
+readinessProbe:
+  exec:
+    command:
+    - sh
+    - -c
+    - |
+      #!/bin/bash
+      # A Sonarqube container is considered ready if the status is UP, DB_MIGRATION_NEEDED or DB_MIGRATION_RUNNING
+      # status about migration are added to prevent the node to be kill while SonarQube is upgrading the database.
+      if wget --no-proxy -qO- http://localhost:{{ .Values.service.internalPort }}{{ .Values.readinessProbe.sonarWebContext | default (include "sonarqube.webcontext" .) }}api/system/status | grep -q -e '"status":"UP"' -e '"status":"DB_MIGRATION_NEEDED"' -e '"status":"DB_MIGRATION_RUNNING"'; then
+        exit 0
+      fi
+      exit 1
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  failureThreshold: 6
+  timeoutSeconds: 1
+
+
+livenessProbe:
+  exec:
+    command:
+    - sh
+    - -c
+    - |
+      wget --no-proxy --quiet -O /dev/null --timeout={{ .Values.livenessProbe.timeoutSeconds }} --header="X-Sonar-Passcode: $SONAR_WEB_SYSTEMPASSCODE" "http://localhost:{{ .Values.service.internalPort }}{{ .Values.livenessProbe.sonarWebContext | default (include "sonarqube.webcontext" .) }}api/system/liveness"
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  failureThreshold: 6
+  timeoutSeconds: 1
+
+
+startupProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 24
+  timeoutSeconds: 1
+
+
+initContainers:
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 0
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources: {}
+
+extraInitContainers: {}
+
+
+extraContainers: []
+extraVolumes: []
+extraVolumeMounts: []
+
+caCerts:
+  enabled: false
+
+initSysctl:
+  enabled: true
+  vmMaxMapCount: 524288
+  fsFileMax: 131072
+  nofile: 131072
+  nproc: 8192
+
+  securityContext:
+    privileged: true
+    runAsUser: 0
+    readOnlyRootFilesystem: true
+
+initFs:
+  enabled: true
+  securityContext:
+    privileged: false
+    runAsNonRoot: false
+    runAsUser: 0
+    runAsGroup: 0
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop: ["ALL"]
+      add: ["CHOWN"]
+    readOnlyRootFilesystem: true
+
+prometheusExporter:
+  enabled: false
+  version: "0.17.2"
+  noCheckCertificate: false
+
+  # Ports for the jmx prometheus agent to export metrics at
+  webBeanPort: 8000
+  ceBeanPort: 8001
+
+  config:
+    rules:
+      - pattern: ".*"
+
+
+prometheusMonitoring:
+  podMonitor:
+    enabled: false
+
+    interval: 30s
+
+
+plugins:
+  install: []
+
+
+  noCheckCertificate: false
+
+
+## (DEPRECATED) The following value sets SONAR_WEB_JAVAOPTS (e.g., jvmOpts: "-Djava.net.preferIPv4Stack=true"). However, this is deprecated, please set SONAR_WEB_JAVAOPTS or sonar.web.javaOpts directly instead.
+jvmOpts: ""
+
+## (DEPRECATED) The following value sets SONAR_CE_JAVAOPTS. However, this is deprecated, please set SONAR_CE_JAVAOPTS or sonar.ce.javaOpts directly instead.
+jvmCeOpts: ""
+
+
+monitoringPasscodeSecretName: "sonarqube-eks-monitoring-password"
+monitoringPasscodeSecretKey: "password"
+
+annotations: {}
+
+resources:
+  limits:
+    cpu: 800m
+    memory: 6144M
+    ephemeral-storage: 512000M
+  requests:
+    cpu: 400m
+    memory: 2048M
+    ephemeral-storage: 1536M
+
+persistence:
+  enabled: false
+  ## Set annotations on pvc
+  annotations: {}
+
+  storageClass:
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  uid: 1000
+  guid: 0
+
+  volumes: []
+  ## DEPRECATED please use root level extraVolumeMounts value
+  ## Specify extra mounts. Refer to ".spec.containers.volumeMounts" specification : https://kubernetes.io/fr/docs/concepts/storage/volumes/
+  mounts: []
+
+emptyDir: {}
+
+jdbcOverwrite:
+  enabled: true
+
+  jdbcSecretName: "sonarqube-eks-db-password"
+  jdbcSecretPasswordKey: "password"
+
+postgresql:
+  enabled: false
+
+podLabels: {}
+# (DEPRECATED) this field will be removed, as it needs to match the SonarQube image folder structure, considering we have one chart version per docker image version this field is not needed anymore.
+sonarqubeFolder: /opt/sonarqube
+
+tests:
+  image: ""
+  enabled: true
+  resources:
+    requests:
+      cpu: 500m
+      memory: 200M
+      ephemeral-storage: 100M
+    limits:
+      cpu: 500m
+      memory: 200M
+      ephemeral-storage: 1000M
+
+
+extraConfig:
+  secrets: []
+  configmaps:
+    - sonarqube-opts
+
+terminationGracePeriodSeconds: 60
+
