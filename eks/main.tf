@@ -291,12 +291,6 @@ output "acm_arn" {
   sensitive   = false
 }
 
-output "sonarqube_domain" {
-  description = "Full domain name for SonarQube"
-  value       = "sonarqube.${var.cluster_name}.${var.aws_region}.${var.domain_name}"
-  sensitive   = false
-}
-
 output "route53_zone_id" {
   description = "Route53 hosted zone ID"
   value       = data.aws_route53_zone.existing.zone_id
@@ -360,7 +354,7 @@ resource "helm_release" "sonarqube" {
 
 output "sonarqube_url" {
   description = "Complete HTTPS URL for SonarQube"
-  value       = "https://sonarqube.${var.cluster_name}.${var.aws_region}.${var.domain_name}"
+  value       = "https://${var.host_name}.${var.domain_name}"
   sensitive   = false
 }
 
