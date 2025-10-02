@@ -23,7 +23,7 @@ data "aws_lb" "sonarqube_alb" {
 # Create A record (alias) pointing to the AWS Load Balancer
 resource "aws_route53_record" "sonarqube" {
   zone_id = data.aws_route53_zone.existing.zone_id
-  name    = "sonarqube.${var.cluster_name}.${var.aws_region}.${var.domain_name}"
+  name    = "${var.host_name}.${var.domain_name}"
   type    = "A"
   
   alias {

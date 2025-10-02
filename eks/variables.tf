@@ -71,6 +71,12 @@ variable "domain_name" {
   type = string
 }
 
+# Host name for the SonarQube instance
+variable "host_name" {
+  description = "Host name for the SonarQube instance"
+  type = string
+}
+
 # Version of the SonarQube Helm chart to deploy. Leave empty for latest version.
 variable "sonarqube_chart_version" {
   description = "Version of the SonarQube Helm chart to deploy. Leave empty for latest version."

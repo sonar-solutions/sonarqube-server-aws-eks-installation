@@ -25,6 +25,7 @@
   ],
   "user_arn": "arn:aws:iam::accountID:role/aws-reserved/sso.amazonaws.com/eu-central-1/user",
   "domain_name": "example.com",
+  "host_name" : "sonarqube",
   "sonarqube_chart_version": "",
   "alb_controller_chart_version": "",
   "db_name": "sonarqube",
