@@ -83,21 +83,3 @@ resource "aws_db_instance" "sonarqube" {
     Owner = var.owner_tag
   }
 }
-
-
-# # Store DB password in the AWS Secrets Manager
-# resource "aws_secretsmanager_secret" "db_password" {
-#   name = "${var.cluster_name}-db-password"
-#   description = "Password for the SonarQube RDS instance"
-
-#   tags = {
-#     Name = "${var.cluster_name}-db-password"
-#     Environment = var.environment
-#     Owner = var.owner_tag
-#   }
-# }
-
-# resource "aws_secretsmanager_secret_version" "db_password" {
-#   secret_id = aws_secretsmanager_secret.db_password.id
-#   secret_string = random_password.db_password.result
-# }

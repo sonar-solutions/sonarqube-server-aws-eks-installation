@@ -190,6 +190,8 @@ resource "random_password" "sonarqube_db_password" {
   upper   = true
   lower   = true
   numeric = true
+  # Exclude characters that AWS RDS doesn't allow: /, @, ", and space
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 # Wait for EKS cluster to be fully ready before creating Kubernetes resources
@@ -223,6 +225,8 @@ resource "random_password" "sonarqube_monitoring_password" {
   upper   = true
   lower   = true
   numeric = true
+  # Exclude characters that AWS RDS doesn't allow: /, @, ", and space
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 resource "kubernetes_secret" "sonarqube_monitoring_password" {
