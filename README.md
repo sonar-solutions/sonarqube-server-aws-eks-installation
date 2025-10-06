@@ -25,11 +25,11 @@ This deployment method is production-ready and includes all necessary components
 
 ## 📋 Prerequisites
 
-- **Terraform**: Version >= 1.5.7
-- **AWS CLI**: Configured with appropriate permissions
+- **Terraform**: Essential for deploying the template
+- **AWS CLI**
 - **kubectl**: For Kubernetes cluster management
-- **Helm**: Version 3.x
-- **Domain**: Registered domain for SSL certificate and routing
+- **Helm**: Needed to deploy/diagnose charts
+- **Domain**: Registered domain and a zone file for SSL certificate and routing
 
 ## 🛠️ Quick Start
 
