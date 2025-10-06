@@ -1,6 +1,6 @@
 # SonarQube Server Enterprise Edition - EKS Deployment
 
-This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon EKS (Elastic Kubernetes Service).
+This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon Elastic Kubernetes Service (ESK).
 
 ## ✅ Status: Fully Implemented and Tested
 
@@ -123,26 +123,6 @@ The `update_variables.py` script assists with configuration management and varia
 - Private subnets for worker nodes and database
 - Network ACLs for additional security layers
 
-## 💰 Cost Optimization Tips
-
-- Use appropriate instance types for your workload
-- Consider Reserved Instances for production deployments
-- Monitor CloudWatch metrics for resource utilization
-- Implement auto-scaling policies
-- Use Spot Instances for development environments (where appropriate)
-
-## 🔄 Maintenance
-
-### Updates
-- Regularly update Terraform providers
-- Monitor for new SonarQube releases
-- Keep Kubernetes version current
-- Update Helm chart versions
-
-### Backup
-- RDS automated backups are enabled
-- Consider EFS backup policies
-- Export SonarQube configurations regularly
 
 ## 🐛 Troubleshooting
 
@@ -153,24 +133,6 @@ The `update_variables.py` script assists with configuration management and varia
 4. **SSL certificate issues**: Confirm domain ownership
 
 ### Logs
-- EKS: `kubectl logs -n sonarqube <pod-name>`
+- EKS: `kubectl logs <pod-name>`
 - CloudWatch: Check application and infrastructure logs
 - ALB: Access logs in S3 (if enabled)
-
-## 💡 Use Cases
-
-This deployment method is ideal for:
-
-- Enterprise-scale deployments
-- Kubernetes-native environments
-- Advanced scaling and high availability requirements
-- Integration with existing Kubernetes workflows
-- Organizations requiring maximum flexibility and scalability
-
-## 📞 Support
-
-For issues specific to the EKS deployment:
-1. Check the troubleshooting section above
-2. Review Kubernetes and AWS EKS documentation
-3. Check SonarQube Helm chart documentation
-4. Open an issue in this repository with detailed logs
