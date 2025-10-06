@@ -3,6 +3,7 @@ resource "aws_efs_file_system" "sonarqube" {
   creation_token = "${var.cluster_name}-efs"
   performance_mode = "generalPurpose"
   throughput_mode = "bursting"
+  encrypted = true
   
   tags = {
     Name = "${var.cluster_name}-efs"
