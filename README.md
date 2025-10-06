@@ -1,6 +1,6 @@
 # SonarQube Server Enterprise Edition - EKS Deployment
 
-This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon EKS (Elastic Kubernetes Service).
+This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon Elastic Kubernetes Service (ESK).
 
 ## ✅ Status: Fully Implemented and Tested
 
