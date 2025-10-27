@@ -56,7 +56,7 @@ This deployment method is production-ready and includes all necessary components
    ```
 
 4. **Access SonarQube**
-   - URL: `https://your-domain.com`
+   - URL: `https://sonarqube.your-domain.com`
    - Default credentials: `admin/admin` (change immediately)
 
 ## ⚙️ Configuration
@@ -100,6 +100,63 @@ The `check-versions.sh` script helps you:
 ### Variable Update Script
 The `update_variables.py` script assists with configuration management and variable updates.
 
+## 📁 Terraform Configuration Files
+
+This project is organized into modular Terraform files, each handling specific infrastructure components:
+
+### `main.tf`
+The primary configuration file containing:
+- Terraform and provider configurations (AWS, Kubernetes, Helm, HTTP, Time)
+- VPC module setup with public/private subnets, NAT gateways, and DNS settings
+- EKS cluster configuration with managed node groups and cluster addons (CoreDNS, kube-proxy, VPC-CNI)
+- Kubernetes secrets and ConfigMaps for database credentials and JDBC configuration
+- Random password generation for database and monitoring
+- SonarQube Helm chart deployment with dynamic ingress configuration
+- Multiple outputs for cluster information, URLs, and connection details
+
+### `variables.tf`
+Defines all input variables used across the infrastructure:
+- AWS region, cluster name, and Kubernetes version
+- Network configuration (VPC CIDR, subnets, availability zones)
+- Instance types and node group settings
+- Domain and host names for DNS configuration
+- Database credentials (name and username)
+- Optional Helm chart version pinning
+- Owner tags and user ARN for access control
+
+### `rds.tf`
+PostgreSQL database infrastructure:
+- RDS subnet group for database placement in private subnets
+- Security group restricting database access to EKS nodes only
+- RDS PostgreSQL instance with encryption, automated backups, and auto-scaling storage
+- Configuration for maintenance windows and backup retention
+
+### `efs.tf`
+Elastic File System for persistent storage:
+- EFS file system with encryption and performance mode configuration
+- Mount targets in all private subnets for high availability
+- Security group allowing NFS traffic (port 2049) from VPC CIDR
+
+### `alb-controller.tf`
+AWS Load Balancer Controller deployment:
+- IAM policy and role with OIDC federation for service account
+- Kubernetes service account with IAM role annotation
+- Helm deployment of AWS Load Balancer Controller
+- Required permissions for managing AWS Application Load Balancers
+
+### `acm.tf`
+SSL/TLS certificate management:
+- AWS Certificate Manager (ACM) certificate request for the SonarQube domain
+- DNS validation method configuration
+- Lifecycle management to prevent resource recreation issues
+
+### `route53.tf`
+DNS and certificate validation:
+- Route53 hosted zone lookup for existing domain
+- A record (alias) pointing to the ALB created by the ingress
+- ACM certificate validation records
+- Certificate validation resource to wait for DNS propagation
+
 ## 🏢 AWS Resources Created
 
 - EKS Cluster with managed node groups
@@ -122,17 +179,3 @@ The `update_variables.py` script assists with configuration management and varia
 - Security groups restrict access to necessary ports only
 - Private subnets for worker nodes and database
 - Network ACLs for additional security layers
-
-
-## 🐛 Troubleshooting
-
-### Common Issues
-1. **Domain validation fails**: Ensure DNS is properly configured
-2. **Pod startup issues**: Check resource limits and node capacity
-3. **Database connection errors**: Verify security group rules
-4. **SSL certificate issues**: Confirm domain ownership
-
-### Logs
-- EKS: `kubectl logs <pod-name>`
-- CloudWatch: Check application and infrastructure logs
-- ALB: Access logs in S3 (if enabled)

@@ -164,25 +164,6 @@ module "eks" {
   }
 }
 
-# resource "eks_managed_node_group" "sonarqube" {
-#   name = "sonarqube-nodes"
-#   instance_types = var.node_instance_types
-#   capacity_type = "ON_DEMAND"
-#   min_size = 1
-#   max_size = 5
-#   desired_size = 2
-#   disk_size = 50
-#   labels = {
-#     Environment = var.environment
-#     Application = "sonarqube"
-#   }
-#   subnet_ids = module.vpc.private_subnets
-#   cluster_name = var.cluster_name
-#   depends_on = [
-#     time_sleep.wait_for_cluster
-#   ]
-# }
-
 # Generate random password for SonarQube database
 resource "random_password" "sonarqube_db_password" {
   length  = 16
