@@ -9,6 +9,11 @@ variable "aws_region" {
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type = string
+  
+  validation {
+    condition     = length(var.cluster_name) > 0 && length(var.cluster_name) <= 21
+    error_message = "The cluster_name must be between 1 and 21 characters. This ensures the ALB controller name_prefix (cluster_name + '-alb-controller-') stays within the AWS limit of 38 characters."
+  }
 }
 
 # Version of the Kubernetes cluster
