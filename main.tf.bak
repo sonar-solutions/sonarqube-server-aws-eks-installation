@@ -32,31 +32,24 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Kubernetes provider configuration using exec-based authentication
-# This generates fresh tokens on each request, which is more robust for both
-# create and destroy operations compared to static token authentication
+# Data source to generate authentication token for the kubernetes and helm providers
+data "aws_eks_cluster_auth" "cluster_auth" {
+  name = module.eks.cluster_name
+}
+
+# Kubernetes provider configuration
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
-  }
+  token = data.aws_eks_cluster_auth.cluster_auth.token
 }
 
-# Helm provider configuration using exec-based authentication
+# Helm provider configuration
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-    
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
-    }
+    token = data.aws_eks_cluster_auth.cluster_auth.token
   }
 }
 
@@ -64,93 +57,9 @@ provider "helm" {
 # This role can be assumed by AWS users/roles to manage the EKS cluster
 data "aws_caller_identity" "current" {}
 
-# IAM Role for EKS Cluster
-# Explicitly created to apply permissions boundary and path required by SCP
-resource "aws_iam_role" "eks_cluster" {
-  name                 = "${var.cluster_name}-cluster"
-  path                 = var.role_path != "" ? var.role_path : "/"
-  permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Name        = "${var.cluster_name}-cluster-role"
-    Environment = var.environment
-    Owner       = var.owner_tag
-  }
-}
-
-# Attach required EKS cluster policies
-resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.eks_cluster.name
-}
-
-resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
-  role       = aws_iam_role.eks_cluster.name
-}
-
-# IAM Role for EKS Node Group
-# Explicitly created to apply permissions boundary and path required by SCP
-resource "aws_iam_role" "eks_node_group" {
-  name                 = "${var.cluster_name}-node-group"
-  path                 = var.role_path != "" ? var.role_path : "/"
-  permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Name        = "${var.cluster_name}-node-group-role"
-    Environment = var.environment
-    Owner       = var.owner_tag
-  }
-}
-
-# Attach required node group policies
-resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.eks_node_group.name
-}
-
-resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-  role       = aws_iam_role.eks_node_group.name
-}
-
-resource "aws_iam_role_policy_attachment" "eks_container_registry_policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-  role       = aws_iam_role.eks_node_group.name
-}
-
-
-
-# IAM Role for EKS Admin (user access to cluster)
 resource "aws_iam_role" "eks_admin" {
   name                 = "${var.cluster_name}-${var.eks_admin_role_name}"
-  path                 = var.role_path != "" ? var.role_path : "/"
+  path                 = var.eks_admin_role_path
   permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
   
   assume_role_policy = jsonencode({
@@ -253,13 +162,13 @@ module "eks" {
   endpoint_private_access = true
   endpoint_public_access = true
   
-  # Use explicitly created IAM role to comply with potentially restrictive SCP requirements
-  create_iam_role = false
-  iam_role_arn    = aws_iam_role.eks_cluster.arn
+  # IAM permissions boundary for EKS cluster role
+  iam_role_path                 = var.eks_admin_role_path
+  iam_role_permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
   
   # Addons needed for the cluster to work
   # Note: CoreDNS needs nodes to run on, so it should NOT have before_compute = true
-  addons = {
+  cluster_addons = {
     vpc-cni = {
       most_recent = true
       before_compute = true  # VPC CNI is needed for pod networking
@@ -274,10 +183,8 @@ module "eks" {
       most_recent = true
       # IMPORTANT: Do NOT set before_compute = true for CoreDNS
       # CoreDNS pods need nodes to run on, so it must wait for node groups to be created
-      before_compute = true
       resolve_conflicts_on_update = "OVERWRITE"
     }
-    #depends_on = [module.vpc]
   }
   
   # Add node groups
@@ -290,30 +197,15 @@ module "eks" {
       max_size = 5
       desired_size = 2
       disk_size = 50
-      
-      # Use explicitly created IAM role to comply with SCP requirements
-      create_iam_role = false
-      iam_role_arn    = aws_iam_role.eks_node_group.arn
-      
-      # IMPORTANT: When using a custom IAM role, we need to explicitly configure
-      # the role to be allowed in the cluster via access entries (not aws-auth)
-      # This is handled by the EKS module when create_iam_role = false
-      
+      # IAM permissions boundary for node group role
+      iam_role_path                 = var.eks_admin_role_path
+      iam_role_permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
       labels = {
         Environment = var.environment
         Application = "sonarqube"
       }
-      
-      tags = {
-        Environment = var.environment
-        Owner       = var.owner_tag
-      }
     }
   }
-  
-  # Enable access entry API for node group authentication
-  # This is the modern way to grant access instead of aws-auth ConfigMap
-  enable_cluster_creator_admin_permissions = true
 
   # Access needed for kubectl to work
   # Using IAM role for EKS cluster administration
@@ -350,16 +242,10 @@ resource "random_password" "sonarqube_db_password" {
 }
 
 # Wait for EKS cluster to be fully ready before creating Kubernetes resources
-# This ensures the cluster API is accessible and ready to accept requests
 resource "time_sleep" "wait_for_cluster" {
   depends_on = [module.eks]
 
   create_duration = "60s"
-
-  triggers = {
-    cluster_endpoint = module.eks.cluster_endpoint
-    cluster_name     = module.eks.cluster_name
-  }
 }
 
 # Create Kubernetes secret for SonarQube database password
@@ -447,18 +333,6 @@ output "eks_admin_role_arn" {
 output "eks_admin_role_name" {
   description = "Name of the IAM role for EKS cluster administration"
   value       = aws_iam_role.eks_admin.name
-  sensitive   = false
-}
-
-output "eks_cluster_role_arn" {
-  description = "ARN of the EKS cluster IAM role"
-  value       = aws_iam_role.eks_cluster.arn
-  sensitive   = false
-}
-
-output "eks_node_group_role_arn" {
-  description = "ARN of the EKS node group IAM role"
-  value       = aws_iam_role.eks_node_group.arn
   sensitive   = false
 }
 
