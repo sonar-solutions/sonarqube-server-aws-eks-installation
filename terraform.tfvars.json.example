@@ -23,7 +23,10 @@
   "node_instance_types": [
     "t3.large"
   ],
-  "user_arn": "arn:aws:iam::accountID:role/aws-reserved/sso.amazonaws.com/eu-central-1/user",
+  "eks_admin_role_name": "eks-cluster-admin",
+  "role_path": "/",
+  "policy_path": "/",
+  "iam_permissions_boundary": "",
   "domain_name": "example.com",
   "host_name" : "sonarqube",
   "sonarqube_chart_version": "",

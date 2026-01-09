@@ -59,6 +59,34 @@ This deployment method is production-ready and includes all necessary components
    - URL: `https://sonarqube.your-domain.com`
    - Default credentials: `admin/admin` (change immediately)
 
+5. **Access the EKS Cluster** (for kubectl management)
+   
+   The cluster uses an IAM role for administration access. To interact with the cluster using kubectl:
+   
+   ```bash
+   # Get the role ARN from Terraform outputs
+   export ROLE_ARN=$(terraform output -raw eks_admin_role_arn)
+   
+   # Assume the role (replace with your session name)
+   aws sts assume-role \
+     --role-arn $ROLE_ARN \
+     --role-session-name eks-admin-session \
+     --external-id "$(terraform output -raw cluster_name)-eks-admin"
+   
+   # Configure AWS credentials with the temporary credentials from assume-role output
+   export AWS_ACCESS_KEY_ID=<AccessKeyId from output>
+   export AWS_SECRET_ACCESS_KEY=<SecretAccessKey from output>
+   export AWS_SESSION_TOKEN=<SessionToken from output>
+   
+   # Update kubeconfig
+   aws eks update-kubeconfig --name $(terraform output -raw cluster_name) --region $(terraform output -raw aws_region)
+   
+   # Verify access
+   kubectl get nodes
+   ```
+   
+   **Note**: Your IAM user/role must have permission to assume the EKS admin role in your AWS account.
+
 ## ⚙️ Configuration
 
 ### Required Variables
@@ -74,7 +102,10 @@ This deployment method is production-ready and includes all necessary components
   "availability_zones": ["eu-central-1a", "eu-central-1b", "eu-central-1c"],
   "owner_tag": "Your Name",
   "node_instance_types": ["t3.large"],
-  "user_arn": "arn:aws:iam::account:user/username",
+  "eks_admin_role_name": "eks-cluster-admin",
+  "role_path": "/",
+  "policy_path": "/",
+  "iam_permissions_boundary": "",
   "domain_name": "your-domain.com",
   "db_name": "sonarqube",
   "db_username": "sonarqube"
@@ -84,6 +115,19 @@ This deployment method is production-ready and includes all necessary components
 ### Optional Variables
 - `sonarqube_chart_version`: Specific SonarQube Helm chart version (default: latest)
 - `alb_controller_chart_version`: Specific ALB Controller chart version (default: latest)
+- `eks_admin_role_name`: Name of the IAM role for EKS cluster administration (default: "eks-cluster-admin")
+- `role_path`: IAM path for IAM roles created by this configuration (default: "/")
+  - Applied to: EKS admin role and ALB controller role
+  - Must start and end with `/` (e.g., `/approles/`, `/service-roles/`, or `/`)
+  - Required if your AWS organization has SCPs restricting IAM role creation paths
+- `policy_path`: IAM path for IAM policies created by this configuration (default: "/")
+  - Applied to: ALB controller policy
+  - Must start and end with `/` (e.g., `/apppolicies/`, `/service-policies/`, or `/`)
+  - Required if your AWS organization has SCPs mandating specific policy paths
+- `iam_permissions_boundary`: ARN of the IAM permissions boundary policy to attach to all IAM roles (default: "")
+  - Example: `"arn:aws:iam::123456789012:policy/AppPermissionsBoundary-V1"`
+  - Required if your AWS organization has SCPs mandating permissions boundaries
+  - Leave empty if not required by your organization
 
 ## 🔧 Utilities
 

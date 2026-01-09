@@ -10,6 +10,7 @@ data "http" "aws_load_balancer_controller_policy" {
 # IAM policy for AWS Load Balancer Controller with additional required permissions
 resource "aws_iam_policy" "aws_load_balancer_controller" {
   name_prefix = "${var.cluster_name}-alb-controller-"
+  path        = var.policy_path != "" ? var.policy_path : "/"
   description = "IAM policy for AWS Load Balancer Controller with all required permissions"
   
   # Use the official policy and add any missing permissions
@@ -39,7 +40,9 @@ resource "aws_iam_policy" "aws_load_balancer_controller" {
 
 # IAM role for AWS Load Balancer Controller service account
 resource "aws_iam_role" "aws_load_balancer_controller" {
-  name_prefix = "${var.cluster_name}-alb-controller-"
+  name_prefix          = "${var.cluster_name}-alb-controller-"
+  path                 = var.role_path != "" ? var.role_path : "/"
+  permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

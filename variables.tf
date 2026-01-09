@@ -64,10 +64,47 @@ variable "node_instance_types" {
   type = list(string)
 }
 
-# ARN of the user
-variable "user_arn" {
-  description = "ARN of the user"
-  type = string
+# Name for the EKS admin IAM role
+variable "eks_admin_role_name" {
+  description = "Name of the IAM role for EKS cluster administration"
+  type        = string
+  default     = "eks-cluster-admin"
+}
+
+# IAM path for the EKS admin role
+variable "role_path" {
+  description = "IAM path for IAM roles (e.g., /approles/ or /). Must start and end with /"
+  type        = string
+  default     = "/"
+  
+  validation {
+    condition     = var.role_path == "" || can(regex("^/.*/$", var.role_path))
+    error_message = "role_path must be empty or start and end with '/' (e.g., '/approles/' or '/')."
+  }
+}
+
+# IAM path for IAM policies
+variable "policy_path" {
+  description = "IAM path for IAM policies (e.g., /apppolicies/ or /). Must start and end with /"
+  type        = string
+  default     = "/"
+  
+  validation {
+    condition     = var.policy_path == "" || can(regex("^/.*/$", var.policy_path))
+    error_message = "policy_path must be empty or start and end with '/' (e.g., '/apppolicies/' or '/')."
+  }
+}
+
+# IAM permissions boundary for all roles
+variable "iam_permissions_boundary" {
+  description = "ARN of the IAM permissions boundary policy to attach to all IAM roles. Required by some AWS organizations with SCPs."
+  type        = string
+  default     = ""
+  
+  validation {
+    condition     = var.iam_permissions_boundary == "" || can(regex("^arn:aws:iam::[0-9]{12}:policy/.*", var.iam_permissions_boundary))
+    error_message = "The iam_permissions_boundary must be empty or a valid IAM policy ARN (e.g., 'arn:aws:iam::123456789012:policy/PolicyName')."
+  }
 }
 
 # Public domain name for the EKS cluster
