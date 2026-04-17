@@ -50,3 +50,5 @@ terraform.rc
 # main.tf backup and sedback files
 main.tf.bak
 main.tf.sedback
+
+.claude
