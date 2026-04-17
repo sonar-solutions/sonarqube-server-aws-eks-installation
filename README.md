@@ -11,7 +11,6 @@ This deployment method is production-ready and includes all necessary components
 - **EKS Cluster**: Managed Kubernetes cluster with configurable node groups
 - **VPC & Networking**: Custom VPC with public/private subnets across multiple AZs
 - **RDS Database**: Managed PostgreSQL database for SonarQube data persistence
-- **EFS Storage**: Elastic File System for shared storage requirements
 - **Application Load Balancer**: AWS ALB with SSL/TLS termination
 - **Route53 DNS**: Domain name management and DNS routing
 - **ACM Certificate**: Automated SSL certificate provisioning
@@ -175,12 +174,6 @@ PostgreSQL database infrastructure:
 - RDS PostgreSQL instance with encryption, automated backups, and auto-scaling storage
 - Configuration for maintenance windows and backup retention
 
-### `efs.tf`
-Elastic File System for persistent storage:
-- EFS file system with encryption and performance mode configuration
-- Mount targets in all private subnets for high availability
-- Security group allowing NFS traffic (port 2049) from VPC CIDR
-
 ### `alb-controller.tf`
 AWS Load Balancer Controller deployment:
 - IAM policy and role with OIDC federation for service account
@@ -223,3 +216,60 @@ DNS and certificate validation:
 - Security groups restrict access to necessary ports only
 - Private subnets for worker nodes and database
 - Network ACLs for additional security layers
+
+## ⚠️ Known Issue: `terraform destroy` VPC Deletion Failure
+
+### What happens
+
+`terraform destroy` may fail with errors like:
+
+```
+Error: deleting EC2 Subnet (...): DependencyViolation: The subnet '...' has dependencies and cannot be deleted.
+Error: deleting EC2 Internet Gateway (...): Network ... has some mapped public address(es).
+Error: deleting EC2 VPC (...): DependencyViolation: The vpc '...' has dependencies and cannot be deleted.
+```
+
+### Why it happens
+
+The AWS Load Balancer Controller (running inside the cluster) creates an ALB, two security groups, and cross-SG ingress rules when the SonarQube ingress is provisioned. These resources are **not tracked in Terraform state** because they are created by the controller at runtime, not by Terraform directly. When `terraform destroy` tears down the EKS cluster it does not know to clean these up first, leaving them attached to the VPC.
+
+### How to fix
+
+Run the following before retrying `terraform destroy`:
+
+```bash
+VPC_ID=$(terraform output -json | python3 -c "import json,sys; print([v for k,v in json.load(sys.stdin).items() if 'vpc' in k.lower()][0]['value'])" 2>/dev/null || \
+  aws ec2 describe-vpcs --region eu-central-1 --filters "Name=tag:Name,Values=*sonarqube*" --query 'Vpcs[0].VpcId' --output text)
+
+# 1. Delete the ALB
+ALB_ARNS=$(aws elbv2 describe-load-balancers --region eu-central-1 \
+  --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text)
+for arn in $ALB_ARNS; do
+  aws elbv2 delete-load-balancer --region eu-central-1 --load-balancer-arn "$arn"
+done
+sleep 30
+
+# 2. Revoke cross-SG rules and delete leftover k8s security groups
+K8S_SGS=$(aws ec2 describe-security-groups --region eu-central-1 \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=k8s-*" \
+  --query 'SecurityGroups[*].GroupId' --output text)
+
+# Revoke any ingress rules referencing these SGs from other SGs in the VPC
+for sg in $K8S_SGS; do
+  REFS=$(aws ec2 describe-security-groups --region eu-central-1 \
+    --filters "Name=vpc-id,Values=$VPC_ID" \
+    --query "SecurityGroups[?IpPermissions[?UserIdGroupPairs[?GroupId=='$sg']]].GroupId" \
+    --output text)
+  for ref_sg in $REFS; do
+    RULES=$(aws ec2 describe-security-groups --region eu-central-1 --group-ids "$ref_sg" \
+      --query "SecurityGroups[0].IpPermissions[?UserIdGroupPairs[?GroupId=='$sg']]" \
+      --output json)
+    aws ec2 revoke-security-group-ingress --region eu-central-1 \
+      --group-id "$ref_sg" --ip-permissions "$RULES"
+  done
+  aws ec2 delete-security-group --region eu-central-1 --group-id "$sg"
+done
+
+# 3. Retry
+terraform destroy -auto-approve
+```
