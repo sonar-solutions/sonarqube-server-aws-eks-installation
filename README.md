@@ -201,7 +201,6 @@ DNS and certificate validation:
 - Internet Gateway and NAT Gateways
 - Route tables and security groups
 - RDS PostgreSQL instance
-- EFS file system and mount targets
 - Application Load Balancer
 - Route53 hosted zone and records
 - ACM SSL certificate
