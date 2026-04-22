@@ -495,32 +495,25 @@ resource "helm_release" "sonarqube" {
   version    = var.sonarqube_chart_version != "" ? var.sonarqube_chart_version : null
 
   values = [
-    # Base values from the static file (without ingress)
     file("${path.module}/sonarqube-values.yaml"),
-    # Dynamic ingress configuration with Terraform variables
     yamlencode({
       ingress = {
-        enabled = true
-        hosts = [
-          {
-            name        = "${var.host_name}.${var.domain_name}"
-            path        = "/*"
-            serviceName = "sonarqube-sonarqube"
-            servicePort = 9000
-            pathType    = "ImplementationSpecific"
-          }
-        ]
+        enabled = false
+      }
+      service = {
+        type         = "LoadBalancer"
+        externalPort = 443
+        internalPort = 9000
         annotations = {
-          "kubernetes.io/ingress.class"                    = "alb"
-          "alb.ingress.kubernetes.io/scheme"               = "internet-facing"
-          "alb.ingress.kubernetes.io/target-type"          = "ip"
-          "alb.ingress.kubernetes.io/listen-ports"         = "[{\"HTTP\": 80}, {\"HTTPS\": 443}]"
-          "alb.ingress.kubernetes.io/ssl-redirect"         = "443"
-          "alb.ingress.kubernetes.io/backend-protocol"     = "HTTP"
-          "alb.ingress.kubernetes.io/healthcheck-path"     = "/api/system/status"
-          "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTP"
-          "alb.ingress.kubernetes.io/success-codes"        = "200"
-          "alb.ingress.kubernetes.io/certificate-arn"      = aws_acm_certificate.sonarqube.arn
+          "service.beta.kubernetes.io/aws-load-balancer-type"                 = "external"
+          "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"      = "ip"
+          "service.beta.kubernetes.io/aws-load-balancer-scheme"               = "internet-facing"
+          "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"             = aws_acm_certificate.sonarqube.arn
+          "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"            = "443"
+          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"     = "http"
+          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"     = "/api/system/status"
+          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol" = "HTTP"
+          "service.beta.kubernetes.io/aws-load-balancer-success-codes"        = "200"
         }
       }
     })
@@ -549,13 +542,13 @@ output "sonarqube_url" {
 
 output "load_balancer_dns" {
   description = "DNS name of the AWS Load Balancer"
-  value       = data.aws_lb.sonarqube_alb.dns_name
+  value       = data.aws_lb.sonarqube_nlb.dns_name
   sensitive   = false
 }
 
 output "load_balancer_zone_id" {
   description = "Zone ID of the AWS Load Balancer"
-  value       = data.aws_lb.sonarqube_alb.zone_id
+  value       = data.aws_lb.sonarqube_nlb.zone_id
   sensitive   = false
 }
 

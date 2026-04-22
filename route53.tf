@@ -8,15 +8,15 @@ data "aws_route53_zone" "existing" {
   private_zone = false
 }
 
-# Data source to get the load balancer created by the AWS Load Balancer Controller
-data "aws_lb" "sonarqube_alb" {
+# Data source to get the NLB created by the AWS Load Balancer Controller
+data "aws_lb" "sonarqube_nlb" {
   depends_on = [
     helm_release.sonarqube
   ]
-  
+
   tags = {
-    "ingress.k8s.aws/resource" = "LoadBalancer"
-    "ingress.k8s.aws/stack"    = "default/sonarqube-sonarqube"
+    "service.k8s.aws/resource" = "LoadBalancer"
+    "service.k8s.aws/stack"    = "default/sonarqube-sonarqube"
   }
 }
 
@@ -27,13 +27,13 @@ resource "aws_route53_record" "sonarqube" {
   type    = "A"
   
   alias {
-    name                   = data.aws_lb.sonarqube_alb.dns_name
-    zone_id               = data.aws_lb.sonarqube_alb.zone_id
+    name                   = data.aws_lb.sonarqube_nlb.dns_name
+    zone_id               = data.aws_lb.sonarqube_nlb.zone_id
     evaluate_target_health = true
   }
 
   depends_on = [
-    data.aws_lb.sonarqube_alb
+    data.aws_lb.sonarqube_nlb
   ]
 }
 
