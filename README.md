@@ -11,7 +11,7 @@ This deployment method is production-ready and includes all necessary components
 - **EKS Cluster**: Managed Kubernetes cluster with configurable node groups
 - **VPC & Networking**: Custom VPC with public/private subnets across multiple AZs
 - **RDS Database**: Managed PostgreSQL database for SonarQube data persistence
-- **Application Load Balancer**: AWS ALB with SSL/TLS termination
+- **Network Load Balancer**: AWS NLB with SSL/TLS termination
 - **Route53 DNS**: Domain name management and DNS routing
 - **ACM Certificate**: Automated SSL certificate provisioning
 
@@ -179,7 +179,7 @@ AWS Load Balancer Controller deployment:
 - IAM policy and role with OIDC federation for service account
 - Kubernetes service account with IAM role annotation
 - Helm deployment of AWS Load Balancer Controller
-- Required permissions for managing AWS Application Load Balancers
+- Required permissions for managing AWS Network Load Balancers
 
 ### `acm.tf`
 SSL/TLS certificate management:
@@ -190,7 +190,7 @@ SSL/TLS certificate management:
 ### `route53.tf`
 DNS and certificate validation:
 - Route53 hosted zone lookup for existing domain
-- A record (alias) pointing to the ALB created by the ingress
+- A record (alias) pointing to the NLB created by the AWS Load Balancer Controller
 - ACM certificate validation records
 - Certificate validation resource to wait for DNS propagation
 
@@ -230,7 +230,7 @@ Error: deleting EC2 VPC (...): DependencyViolation: The vpc '...' has dependenci
 
 ### Why it happens
 
-The AWS Load Balancer Controller (running inside the cluster) creates an ALB, two security groups, and cross-SG ingress rules when the SonarQube ingress is provisioned. These resources are **not tracked in Terraform state** because they are created by the controller at runtime, not by Terraform directly. When `terraform destroy` tears down the EKS cluster it does not know to clean these up first, leaving them attached to the VPC.
+The AWS Load Balancer Controller (running inside the cluster) creates an NLB, security groups, and cross-SG ingress rules when the SonarQube service is provisioned. These resources are **not tracked in Terraform state** because they are created by the controller at runtime, not by Terraform directly. When `terraform destroy` tears down the EKS cluster it does not know to clean these up first, leaving them attached to the VPC.
 
 ### How to fix
 
@@ -242,7 +242,7 @@ AWS_REGION=$(python3 -c "import json; print(json.load(open('terraform.tfvars.jso
 VPC_ID=$(terraform output -json | python3 -c "import json,sys; print([v for k,v in json.load(sys.stdin).items() if 'vpc' in k.lower()][0]['value'])" 2>/dev/null || \
   aws ec2 describe-vpcs --region "$AWS_REGION" --filters "Name=tag:Name,Values=*sonarqube*" --query 'Vpcs[0].VpcId' --output text)
 
-# 1. Delete the ALB
+# 1. Delete the NLB
 ALB_ARNS=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
   --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text)
 for arn in $ALB_ARNS; do
