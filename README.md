@@ -237,36 +237,38 @@ The AWS Load Balancer Controller (running inside the cluster) creates an ALB, tw
 Run the following before retrying `terraform destroy`:
 
 ```bash
+AWS_REGION=$(python3 -c "import json; print(json.load(open('terraform.tfvars.json'))['aws_region'])")
+
 VPC_ID=$(terraform output -json | python3 -c "import json,sys; print([v for k,v in json.load(sys.stdin).items() if 'vpc' in k.lower()][0]['value'])" 2>/dev/null || \
-  aws ec2 describe-vpcs --region eu-central-1 --filters "Name=tag:Name,Values=*sonarqube*" --query 'Vpcs[0].VpcId' --output text)
+  aws ec2 describe-vpcs --region "$AWS_REGION" --filters "Name=tag:Name,Values=*sonarqube*" --query 'Vpcs[0].VpcId' --output text)
 
 # 1. Delete the ALB
-ALB_ARNS=$(aws elbv2 describe-load-balancers --region eu-central-1 \
+ALB_ARNS=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
   --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text)
 for arn in $ALB_ARNS; do
-  aws elbv2 delete-load-balancer --region eu-central-1 --load-balancer-arn "$arn"
+  aws elbv2 delete-load-balancer --region "$AWS_REGION" --load-balancer-arn "$arn"
 done
 sleep 30
 
 # 2. Revoke cross-SG rules and delete leftover k8s security groups
-K8S_SGS=$(aws ec2 describe-security-groups --region eu-central-1 \
+K8S_SGS=$(aws ec2 describe-security-groups --region "$AWS_REGION" \
   --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=k8s-*" \
   --query 'SecurityGroups[*].GroupId' --output text)
 
 # Revoke any ingress rules referencing these SGs from other SGs in the VPC
 for sg in $K8S_SGS; do
-  REFS=$(aws ec2 describe-security-groups --region eu-central-1 \
+  REFS=$(aws ec2 describe-security-groups --region "$AWS_REGION" \
     --filters "Name=vpc-id,Values=$VPC_ID" \
     --query "SecurityGroups[?IpPermissions[?UserIdGroupPairs[?GroupId=='$sg']]].GroupId" \
     --output text)
   for ref_sg in $REFS; do
-    RULES=$(aws ec2 describe-security-groups --region eu-central-1 --group-ids "$ref_sg" \
+    RULES=$(aws ec2 describe-security-groups --region "$AWS_REGION" --group-ids "$ref_sg" \
       --query "SecurityGroups[0].IpPermissions[?UserIdGroupPairs[?GroupId=='$sg']]" \
       --output json)
-    aws ec2 revoke-security-group-ingress --region eu-central-1 \
+    aws ec2 revoke-security-group-ingress --region "$AWS_REGION" \
       --group-id "$ref_sg" --ip-permissions "$RULES"
   done
-  aws ec2 delete-security-group --region eu-central-1 --group-id "$sg"
+  aws ec2 delete-security-group --region "$AWS_REGION" --group-id "$sg"
 done
 
 # 3. Retry
