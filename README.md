@@ -14,6 +14,7 @@ This deployment method is production-ready and includes all necessary components
 - **Network Load Balancer**: AWS NLB with SSL/TLS termination
 - **Route53 DNS**: Domain name management and DNS routing
 - **ACM Certificate**: Automated SSL certificate provisioning
+- **Agentic features** (SonarQube Server 2026.5+): Vortex analysis, Agent Orchestrator, Hunter Agent and Remediation Agent, with an S3 bucket, IRSA role, gVisor-sandboxed agent node group and egress proxy
 
 ## 🚀 Key Features
 
@@ -111,6 +112,8 @@ This deployment method is production-ready and includes all necessary components
 }
 ```
 
+> With Vortex enabled, the `sonarqube` node group hosts SonarQube (4 GiB request) and Vortex (6 GiB request). Use instances with at least 16 GiB, e.g. `t3.xlarge`.
+
 ### Optional Variables
 - `sonarqube_chart_version`: Specific SonarQube Helm chart version (default: latest)
 - `alb_controller_chart_version`: Specific ALB Controller chart version (default: latest)
@@ -127,6 +130,64 @@ This deployment method is production-ready and includes all necessary components
   - Example: `"arn:aws:iam::123456789012:policy/AppPermissionsBoundary-V1"`
   - Required if your AWS organization has SCPs mandating permissions boundaries
   - Leave empty if not required by your organization
+- `enable_vortex_analysis`, `enable_hunter_agent`, `enable_remediation_agent`: Deploy the agentic components (default: `true`). See [Agentic features](#-agentic-features-vortex-hunter-agent-remediation-agent)
+- `agentic_bucket_name`: S3 bucket for agentic storage (default: `<cluster_name>-agentic-<account_id>`)
+- `agent_egress_allowed_domains`: Hostnames the agent runtimes may reach, i.e. your LLM provider API (default: `["api.anthropic.com"]`). The S3 bucket hostname is added automatically
+- `agent_node_instance_types`: Instance types for the agent runtime node group (default: `["m6i.xlarge"]`)
+- `agent_node_desired_size`: Number of agent runtime nodes (default: `1`)
+- `gvisor_installer_enabled`: Install gVisor with the chart's privileged DaemonSet (default: `true`). See [Sandbox runtime](#sandbox-runtime)
+
+## 🤖 Agentic features (Vortex, Hunter Agent, Remediation Agent)
+
+SonarQube Server 2026.5+ can run AI agents next to the server. This template deploys every component required by the [AI agents installation guide](https://docs.sonarsource.com/sonarqube-server/server-installation/ai-agents) through the [Helm chart's agentic values](https://github.com/SonarSource/helm-chart-sonarqube/tree/master/charts/sonarqube#agentic-features). Use chart version `2026.5.1000` or later (the default, latest, satisfies this).
+
+### Components deployed by the Helm chart
+
+| Component | Enabled by | Runs on |
+| --- | --- | --- |
+| Vortex analysis | `enable_vortex_analysis` or `enable_remediation_agent` | `sonarqube` node group |
+| Agent Orchestrator | `enable_hunter_agent` or `enable_remediation_agent` | `sonarqube` node group |
+| Hunter Agent runtime | `enable_hunter_agent` | `agent_runtime` node group, gVisor sandbox |
+| Remediation Agent runtime | `enable_remediation_agent` | `agent_runtime` node group, gVisor sandbox |
+| Agent Egress Proxy (Squid, 2 replicas) | any agent | `sonarqube` node group |
+| gVisor installer DaemonSet | `gvisor_installer_enabled` | `agent_runtime` node group |
+| Key derivation hook Job | any agentic component | any node |
+
+### AWS and Kubernetes resources provisioned by Terraform (`agentic.tf`)
+
+- **S3 bucket** shared by SonarQube (agent job logs), the Agent Orchestrator (job artifacts) and Vortex (analysis context). It is private, encrypted (SSE-S3), TLS-only, and has a lifecycle rule that aborts incomplete multipart uploads. Artifact retention is managed in SonarQube (**General Settings > Housekeeping > Agentic**, 30 days by default).
+- **S3 gateway VPC endpoint**, so bucket traffic from the private subnets doesn't go through the NAT gateways.
+- **IRSA role** (honours `role_path`, `policy_path` and `iam_permissions_boundary`) with read/write access to the bucket. It is trusted only by the `sonarqube-server`, `sonarqube-agent-orchestrator` and `sonarqube-vortex` ServiceAccounts. The agent runtimes and the egress proxy get their own ServiceAccounts without an IAM role: the agents use presigned URLs.
+- **Agentic signing secret** (`agentic-instance-secret`). Every component's signing keys are derived from it.
+- **Settings encryption key** (`sonarqube-settings-encryption-key`, mounted as `sonar.secretKeyPath`). It encrypts secrets such as the LLM provider API key, and the Agent Orchestrator receives a copy. Don't rotate it once secrets are stored.
+- **Agent runtime node group**: dedicated nodes with a 100 GiB root volume, labeled and tainted `sonarqube.org/agent-runtime=true:NoSchedule`, so only the sandboxed agents run there.
+- **NetworkPolicy enforcement** in the VPC CNI add-on (`enableNetworkPolicy`), so the chart's NetworkPolicies actually restrict the agent runtimes to the egress proxy.
+- **Database**: SonarQube and the Agent Orchestrator share the RDS database through the chart's `jdbcOverwrite` values (`sslmode=require`). The former `sonarqube-opts` ConfigMap has been removed because the agentic features don't support `extraConfig` for JDBC settings.
+
+### Sandbox runtime
+
+By default, the chart's gVisor installer, a **privileged** DaemonSet, installs `runsc` into containerd on the agent nodes only, then labels them `gvisor.enabled=true`. That's convenient for evaluation. For production, bake `runsc` into a custom node AMI, then set `gvisor_installer_enabled` to `false`. Terraform then adds the `gvisor.enabled=true` label to the agent nodes itself.
+
+The agent runtimes need x86-64 or ARM64 nodes running natively. If you choose Graviton instance types for `agent_node_instance_types`, also set a matching `ami_type` on the node group.
+
+### Network egress
+
+The agent runtimes reach the internet only through the Agent Egress Proxy, which allows only `agent_egress_allowed_domains` plus the S3 bucket hostname. Set this variable to your LLM provider's API hostname, for example:
+
+```json
+"agent_egress_allowed_domains": ["api.anthropic.com"]
+```
+
+or `["bedrock-runtime.eu-central-1.amazonaws.com"]` for Amazon Bedrock. The Agent Orchestrator clones repositories and opens pull requests itself, so the DevOps platform doesn't need to be listed.
+
+### After `terraform apply`
+
+1. **License**: add the Hunter Agent and Remediation Agent subscriptions to your license (contact Sonar Sales).
+2. **LLM provider**: in **Administration > Configuration > AI Capabilities > LLM Providers**, register a provider and model. The agent toggles stay locked until you do.
+3. **Projects**: bind each project to a DevOps repository (a GitHub App integration is required for the Remediation Agent to open pull requests), and analyze it at least once.
+4. **Verify**: `kubectl get pods -n default` should show the Vortex, agent orchestrator, hunter, remediation and egress-proxy pods as `Running`. Vortex can take several minutes to become ready on first start. See [Verifying the deployment](https://docs.sonarsource.com/sonarqube-server/server-installation/ai-agents/verifying-the-deployment).
+
+To deploy SonarQube without the agentic features, set `enable_vortex_analysis`, `enable_hunter_agent` and `enable_remediation_agent` to `false`. No agentic AWS resources, secrets or node group are created then.
 
 ## 🔧 Utilities
 
@@ -152,9 +213,10 @@ The primary configuration file containing:
 - Terraform and provider configurations (AWS, Kubernetes, Helm, HTTP, Time)
 - VPC module setup with public/private subnets, NAT gateways, and DNS settings
 - EKS cluster configuration with managed node groups and cluster addons (CoreDNS, kube-proxy, VPC-CNI)
-- Kubernetes secrets and ConfigMaps for database credentials and JDBC configuration
+- Kubernetes secrets for database credentials and the settings encryption key
 - Random password generation for database and monitoring
-- SonarQube Helm chart deployment with dynamic ingress configuration
+- SonarQube Helm chart deployment with JDBC, load balancer and agentic configuration
+- Optional agent runtime node group for the sandboxed Hunter and Remediation Agents
 - Multiple outputs for cluster information, URLs, and connection details
 
 ### `variables.tf`
@@ -166,6 +228,13 @@ Defines all input variables used across the infrastructure:
 - Database credentials (name and username)
 - Optional Helm chart version pinning
 - Owner tags and user ARN for access control
+
+### `agentic.tf`
+Resources for the agentic features (Vortex, Hunter Agent, Remediation Agent):
+- S3 bucket, bucket policy and S3 gateway VPC endpoint
+- IRSA role and policy for SonarQube, the Agent Orchestrator and Vortex
+- Agentic signing secret
+- Helm values for the agentic components, gVisor sandbox and egress proxy
 
 ### `rds.tf`
 PostgreSQL database infrastructure:
@@ -204,6 +273,7 @@ DNS and certificate validation:
 - Application Load Balancer
 - Route53 hosted zone and records
 - ACM SSL certificate
+- S3 bucket and S3 gateway VPC endpoint (agentic features)
 - IAM roles and policies
 - CloudWatch log groups
 

@@ -3,6 +3,8 @@ edition: "enterprise"
 monitoringPasscodeSecretName: "sonarqube-eks-monitoring-password"
 monitoringPasscodeSecretKey: "password"
 
+# jdbcUrl and jdbcUsername are set by Terraform (main.tf).
+# The agentic features require jdbcOverwrite: the Agent Orchestrator reads its database from it.
 jdbcOverwrite:
   enabled: true
   jdbcSecretName: "sonarqube-eks-db-password"
@@ -10,7 +12,3 @@ jdbcOverwrite:
 
 postgresql:
   enabled: false
-
-extraConfig:
-  configmaps:
-    - sonarqube-opts
