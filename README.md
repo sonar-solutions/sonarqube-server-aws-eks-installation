@@ -1,6 +1,6 @@
 # SonarQube Server Enterprise Edition - EKS Deployment
 
-This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon Elastic Kubernetes Service (ESK).
+This directory contains Terraform templates for deploying SonarQube Server Enterprise Edition on Amazon Elastic Kubernetes Service (EKS).
 
 ## ✅ Status: Fully Implemented and Tested
 
@@ -20,8 +20,8 @@ This deployment method is production-ready and includes all necessary components
 
 - **Helm-based Deployment**: Uses official SonarQube Helm charts
 - **Version Management**: Configurable chart versions for production stability
-- **Security**: IAM roles, security groups, and network policies
-- **Scalability**: Auto-scaling node groups and horizontal pod scaling
+- **Security**: IAM roles, security groups, and enforced Kubernetes NetworkPolicies
+- **Scalability**: Managed node groups with configurable size limits
 
 ## 📋 Prerequisites
 
@@ -29,7 +29,8 @@ This deployment method is production-ready and includes all necessary components
 - **AWS CLI**
 - **kubectl**: For Kubernetes cluster management
 - **Helm**: Needed to deploy/diagnose charts
-- **Domain**: Registered domain and a zone file for SSL certificate and routing
+- **Domain**: A public Route53 hosted zone for `domain_name` in the target AWS account. Terraform looks it up and adds the DNS and certificate validation records; it does not create the zone
+- **License** (agentic features only): Hunter Agent and Remediation Agent subscriptions on your SonarQube Server license
 
 ## 🛠️ Quick Start
 
@@ -101,29 +102,30 @@ This deployment method is production-ready and includes all necessary components
   "public_subnets": ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"],
   "availability_zones": ["eu-central-1a", "eu-central-1b", "eu-central-1c"],
   "owner_tag": "Your Name",
-  "node_instance_types": ["t3.large"],
+  "node_instance_types": ["t3.xlarge"],
   "eks_admin_role_name": "eks-cluster-admin",
   "role_path": "/",
   "policy_path": "/",
   "iam_permissions_boundary": "",
   "domain_name": "your-domain.com",
+  "host_name": "sonarqube",
   "db_name": "sonarqube",
   "db_username": "sonarqube"
 }
 ```
 
-> With Vortex enabled, the `sonarqube` node group hosts SonarQube (4 GiB request) and Vortex (6 GiB request). Use instances with at least 16 GiB, e.g. `t3.xlarge`.
+> With Vortex enabled, the `sonarqube` node group hosts SonarQube (4 GiB memory request) and Vortex (6 GiB memory request), so use instances with at least 16 GiB, e.g. `t3.xlarge`. `t3.large` is enough only when the agentic features are disabled.
 
 ### Optional Variables
 - `sonarqube_chart_version`: Specific SonarQube Helm chart version (default: latest)
 - `alb_controller_chart_version`: Specific ALB Controller chart version (default: latest)
 - `eks_admin_role_name`: Name of the IAM role for EKS cluster administration (default: "eks-cluster-admin")
 - `role_path`: IAM path for IAM roles created by this configuration (default: "/")
-  - Applied to: EKS admin role and ALB controller role
+  - Applied to: EKS cluster, node group, EKS admin, ALB controller and agentic storage (IRSA) roles
   - Must start and end with `/` (e.g., `/approles/`, `/service-roles/`, or `/`)
   - Required if your AWS organization has SCPs restricting IAM role creation paths
 - `policy_path`: IAM path for IAM policies created by this configuration (default: "/")
-  - Applied to: ALB controller policy
+  - Applied to: ALB controller and agentic storage policies
   - Must start and end with `/` (e.g., `/apppolicies/`, `/service-policies/`, or `/`)
   - Required if your AWS organization has SCPs mandating specific policy paths
 - `iam_permissions_boundary`: ARN of the IAM permissions boundary policy to attach to all IAM roles (default: "")
@@ -227,13 +229,16 @@ Defines all input variables used across the infrastructure:
 - Domain and host names for DNS configuration
 - Database credentials (name and username)
 - Optional Helm chart version pinning
-- Owner tags and user ARN for access control
+- IAM role/policy paths and permissions boundary
+- Owner tags
+- Agentic feature toggles, S3 bucket name, egress allowlist, agent node group sizing and gVisor installer toggle
 
 ### `agentic.tf`
 Resources for the agentic features (Vortex, Hunter Agent, Remediation Agent):
 - S3 bucket, bucket policy and S3 gateway VPC endpoint
 - IRSA role and policy for SonarQube, the Agent Orchestrator and Vortex
 - Agentic signing secret
+- Outputs for the bucket name, IRSA role ARN and egress allowlist
 - Helm values for the agentic components, gVisor sandbox and egress proxy
 
 ### `rds.tf`
@@ -265,13 +270,13 @@ DNS and certificate validation:
 
 ## 🏢 AWS Resources Created
 
-- EKS Cluster with managed node groups
+- EKS Cluster with managed node groups (plus the agent runtime node group when an agent is enabled)
 - VPC with public/private subnets
 - Internet Gateway and NAT Gateways
 - Route tables and security groups
 - RDS PostgreSQL instance
-- Application Load Balancer
-- Route53 hosted zone and records
+- Network Load Balancer (created by the AWS Load Balancer Controller)
+- Route53 records in the existing hosted zone
 - ACM SSL certificate
 - S3 bucket and S3 gateway VPC endpoint (agentic features)
 - IAM roles and policies
@@ -279,18 +284,29 @@ DNS and certificate validation:
 
 ## 🔒 Security Features
 
-- All traffic encrypted in transit (HTTPS/TLS)
-- Database credentials managed via AWS Secrets Manager
-- IAM roles follow least privilege principle
-- Security groups restrict access to necessary ports only
-- Private subnets for worker nodes and database
-- Network ACLs for additional security layers
+- HTTPS/TLS at the NLB, and TLS (`sslmode=require`) between SonarQube/the Agent Orchestrator and RDS
+- Generated database, monitoring, signing and settings encryption secrets stored as Kubernetes Secrets (never in variables)
+- IAM roles scoped per component (IRSA), with optional role/policy paths and permissions boundary
+- Security groups restrict database access to the EKS nodes only
+- Private subnets for worker nodes and database; encrypted node volumes, RDS storage and S3 bucket
+- Agent runtimes sandboxed with gVisor on dedicated nodes, with egress limited to an allowlist by the egress proxy and enforced NetworkPolicies
+
+## 🧹 Tearing down
+
+Destroy the SonarQube Helm release first, while the AWS Load Balancer Controller is still running, so it deletes the NLB and security groups it created. Then destroy everything else:
+
+```bash
+terraform destroy -target=aws_route53_record.sonarqube -target=helm_release.sonarqube
+terraform destroy
+```
+
+The agentic S3 bucket is created with `force_destroy`, so it is deleted along with any remaining job artifacts.
 
 ## ⚠️ Known Issue: `terraform destroy` VPC Deletion Failure
 
 ### What happens
 
-`terraform destroy` may fail with errors like:
+A plain `terraform destroy` (without the targeted step above) may fail with errors like:
 
 ```
 Error: deleting EC2 Subnet (...): DependencyViolation: The subnet '...' has dependencies and cannot be deleted.
