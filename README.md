@@ -360,3 +360,7 @@ done
 # 3. Retry
 terraform destroy -auto-approve
 ```
+
+## 📄 License
+
+This project is licensed under the [GNU Lesser General Public License v3.0](LICENSE).
