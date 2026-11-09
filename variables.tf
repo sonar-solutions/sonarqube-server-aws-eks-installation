@@ -78,7 +78,7 @@ variable "role_path" {
   default     = "/"
   
   validation {
-    condition     = var.role_path == "" || can(regex("^/.*/$", var.role_path))
+    condition     = var.role_path == "" || can(regex("^/(.*/)?$", var.role_path))
     error_message = "role_path must be empty or start and end with '/' (e.g., '/approles/' or '/')."
   }
 }
@@ -90,7 +90,7 @@ variable "policy_path" {
   default     = "/"
   
   validation {
-    condition     = var.policy_path == "" || can(regex("^/.*/$", var.policy_path))
+    condition     = var.policy_path == "" || can(regex("^/(.*/)?$", var.policy_path))
     error_message = "policy_path must be empty or start and end with '/' (e.g., '/apppolicies/' or '/')."
   }
 }
@@ -143,4 +143,65 @@ variable "db_name" {
 variable "db_username" {
   description = "Username of the database"
   type = string
+}
+
+# ---------------------------------------------------------------------------
+# Agentic features (Vortex, Hunter Agent, Remediation Agent) - SonarQube Server 2026.5+
+# ---------------------------------------------------------------------------
+
+# Deploy the Vortex analysis service
+variable "enable_vortex_analysis" {
+  description = "Deploy Vortex analysis. Forced on when enable_remediation_agent is true."
+  type        = bool
+  default     = true
+}
+
+# Deploy the Hunter Agent runtime (requires a Hunter Agent subscription in the license)
+variable "enable_hunter_agent" {
+  description = "Deploy the Hunter Agent runtime (and the Agent Orchestrator it needs)"
+  type        = bool
+  default     = true
+}
+
+# Deploy the Remediation Agent runtime (requires a Remediation Agent subscription in the license)
+variable "enable_remediation_agent" {
+  description = "Deploy the Remediation Agent runtime (and the Agent Orchestrator and Vortex it needs)"
+  type        = bool
+  default     = true
+}
+
+# Name of the S3 bucket shared by SonarQube, the Agent Orchestrator and Vortex. Leave empty to derive one.
+variable "agentic_bucket_name" {
+  description = "S3 bucket for agentic job artifacts and Vortex analysis context. Leave empty for <cluster_name>-agentic-<account_id>."
+  type        = string
+  default     = ""
+}
+
+# Hostnames the sandboxed agent runtimes may reach through the egress proxy.
+# The agentic S3 bucket hostname is always added automatically.
+variable "agent_egress_allowed_domains" {
+  description = "Domains the agent runtimes may reach through the Agent Egress Proxy (your LLM provider API, e.g. api.anthropic.com or bedrock-runtime.<region>.amazonaws.com). The S3 bucket hostname is added automatically."
+  type        = list(string)
+  default     = ["api.anthropic.com"]
+}
+
+# Instance types for the dedicated, gVisor-sandboxed agent node group
+variable "agent_node_instance_types" {
+  description = "Instance types for the agent runtime node group. Hunter requests 8Gi memory per replica, so use at least 16 GiB instances."
+  type        = list(string)
+  default     = ["m6i.xlarge"]
+}
+
+# Desired number of nodes in the agent runtime node group
+variable "agent_node_desired_size" {
+  description = "Desired number of nodes in the agent runtime node group"
+  type        = number
+  default     = 1
+}
+
+# Let the chart install gVisor (runsc) on the agent nodes with a privileged DaemonSet
+variable "gvisor_installer_enabled" {
+  description = "Install gVisor on the agent nodes with the chart's privileged DaemonSet. Set to false if runsc is baked into the node image (recommended for production)."
+  type        = bool
+  default     = true
 }

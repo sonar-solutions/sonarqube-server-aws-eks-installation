@@ -12,7 +12,7 @@ terraform {
     }
     random = {
       source = "hashicorp/random"
-      version = "~> 3.1"
+      version = "~> 3.6"
     }
     helm = {
       source = "hashicorp/helm"
@@ -264,6 +264,10 @@ module "eks" {
       most_recent = true
       before_compute = true  # VPC CNI is needed for pod networking
       resolve_conflicts_on_update = "OVERWRITE"
+      # Enforce NetworkPolicies: the agent runtimes must only reach the internet through the Agent Egress Proxy
+      configuration_values = jsonencode({
+        enableNetworkPolicy = "true"
+      })
     }
     kube-proxy = {
       most_recent = true
@@ -281,7 +285,7 @@ module "eks" {
   }
   
   # Add node groups
-  eks_managed_node_groups = {
+  eks_managed_node_groups = merge({
     sonarqube = {
       name = "sonarqube-nodes"
       instance_types = var.node_instance_types
@@ -289,8 +293,19 @@ module "eks" {
       min_size = 1
       max_size = 5
       desired_size = 2
-      disk_size = 50
-      
+      # disk_size is ignored with the module's custom launch template, so size the root volume here
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = 50
+            volume_type           = "gp3"
+            encrypted             = true
+            delete_on_termination = true
+          }
+        }
+      }
+
       # Use explicitly created IAM role to comply with SCP requirements
       create_iam_role = false
       iam_role_arn    = aws_iam_role.eks_node_group.arn
@@ -309,8 +324,52 @@ module "eks" {
         Owner       = var.owner_tag
       }
     }
-  }
-  
+  }, local.agents_enabled ? {
+    # Dedicated, tainted nodes for the gVisor-sandboxed Hunter and Remediation Agent runtimes
+    agent_runtime = {
+      name = "agent-runtime-nodes"
+      instance_types = var.agent_node_instance_types
+      capacity_type = "ON_DEMAND"
+      min_size = 1
+      max_size = 3
+      desired_size = var.agent_node_desired_size
+      # Room for the agents' ephemeral storage (up to 15Gi Hunter + 50Gi Remediation) and the gVisor overlay
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = 100
+            volume_type           = "gp3"
+            encrypted             = true
+            delete_on_termination = true
+          }
+        }
+      }
+
+      create_iam_role = false
+      iam_role_arn    = aws_iam_role.eks_node_group.arn
+
+      # Without the chart installer, runsc must be in the node image and the nodes pre-labeled for the RuntimeClass
+      labels = merge({
+        Environment = var.environment
+        Application = "sonarqube-agents"
+      }, local.agent_node_labels, var.gvisor_installer_enabled ? {} : { "gvisor.enabled" = "true" })
+
+      taints = {
+        agent_runtime = {
+          key    = local.agent_node_label_key
+          value  = "true"
+          effect = "NO_SCHEDULE"
+        }
+      }
+
+      tags = {
+        Environment = var.environment
+        Owner       = var.owner_tag
+      }
+    }
+  } : {})
+
   # Enable access entry API for node group authentication
   # This is the modern way to grant access instead of aws-auth ConfigMap
   enable_cluster_creator_admin_permissions = true
@@ -406,22 +465,32 @@ resource "kubernetes_secret" "sonarqube_monitoring_password" {
   ]
 }
 
-# Create Kubernetes ConfigMap for SonarQube JDBC configuration
-resource "kubernetes_config_map" "sonarqube_opts" {
+# Settings encryption key (sonar.secretKeyPath). It encrypts secrets stored in SonarQube settings,
+# such as the LLM provider API key, and is shared with the Agent Orchestrator so it can decrypt them.
+# Never rotate it once secrets are stored: they could no longer be decrypted.
+resource "random_bytes" "sonarqube_settings_encryption_key" {
+  length = 16
+}
+
+resource "kubernetes_secret" "sonarqube_settings_encryption_key" {
   metadata {
-    name      = "sonarqube-opts"
+    name      = "sonarqube-settings-encryption-key"
     namespace = "default"
   }
-  
   data = {
-    SONAR_JDBC_USERNAME = var.db_username
-    SONAR_JDBC_URL      = "jdbc:postgresql://${aws_db_instance.sonarqube.endpoint}/${aws_db_instance.sonarqube.db_name}"
+    "sonar-secret.txt" = random_bytes.sonarqube_settings_encryption_key.base64
   }
 
+  type = "Opaque"
+
   depends_on = [
-    time_sleep.wait_for_cluster,
-    aws_db_instance.sonarqube
+    time_sleep.wait_for_cluster
   ]
+}
+
+# JDBC URL shared by SonarQube and the Agent Orchestrator (RDS enforces TLS by default)
+locals {
+  sonarqube_jdbc_url = "jdbc:postgresql://${aws_db_instance.sonarqube.endpoint}/${aws_db_instance.sonarqube.db_name}?sslmode=require"
 }
 
 # Terraform outputs for RDS connection information
@@ -494,9 +563,27 @@ resource "helm_release" "sonarqube" {
   namespace  = "default"
   version    = var.sonarqube_chart_version != "" ? var.sonarqube_chart_version : null
 
-  values = [
+  values = concat([
     file("${path.module}/sonarqube-values.yaml"),
     yamlencode({
+      # The Agent Orchestrator reads its database from jdbcOverwrite, so configure it here rather than via extraConfig
+      jdbcOverwrite = {
+        jdbcUrl      = local.sonarqube_jdbc_url
+        jdbcUsername = var.db_username
+      }
+      sonarSecretKey = kubernetes_secret.sonarqube_settings_encryption_key.metadata[0].name
+      vortexAnalysis = {
+        enabled = local.vortex_enabled
+      }
+      agentOrchestrator = {
+        enabled = local.agents_enabled
+      }
+      hunterAgent = {
+        enabled = var.enable_hunter_agent
+      }
+      remediationAgent = {
+        enabled = var.enable_remediation_agent
+      }
       ingress = {
         enabled = false
       }
@@ -517,7 +604,7 @@ resource "helm_release" "sonarqube" {
         }
       }
     })
-  ]
+  ], local.agentic_helm_values)
 
   depends_on = [
     time_sleep.wait_for_cluster,
@@ -525,13 +612,18 @@ resource "helm_release" "sonarqube" {
     aws_acm_certificate_validation.sonarqube,
     kubernetes_secret.sonarqube_db_password,
     kubernetes_secret.sonarqube_monitoring_password,
-    kubernetes_config_map.sonarqube_opts
+    kubernetes_secret.sonarqube_settings_encryption_key,
+    kubernetes_secret.agentic_instance_secret,
+    aws_iam_role_policy_attachment.agentic_storage,
+    aws_s3_bucket_policy.agentic,
+    aws_vpc_endpoint.s3
   ]
 
-  # Wait for SonarQube to be ready
+  # Wait for SonarQube to be ready. Vortex can take several minutes to load its analyzers on first start,
+  # and the gVisor installer has to finish before the agent runtimes can be scheduled.
   wait          = true
   wait_for_jobs = true
-  timeout       = 900
+  timeout       = 1500
 }
 
 output "sonarqube_url" {
@@ -565,8 +657,8 @@ output "alb_controller_chart_version" {
 }
 
 output "sonarqube_jdbc_url" {
-  description = "JDBC URL used by SonarQube to connect to the database"
-  value       = "jdbc:postgresql://${aws_db_instance.sonarqube.endpoint}/${aws_db_instance.sonarqube.db_name}"
+  description = "JDBC URL used by SonarQube and the Agent Orchestrator to connect to the database"
+  value       = local.sonarqube_jdbc_url
   sensitive   = false
 }
 

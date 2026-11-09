@@ -21,16 +21,28 @@
   ],
   "owner_tag": "Fryderyk Szopen",
   "node_instance_types": [
-    "t3.large"
+    "t3.xlarge"
   ],
   "eks_admin_role_name": "eks-cluster-admin",
   "role_path": "/",
   "policy_path": "/",
   "iam_permissions_boundary": "",
   "domain_name": "example.com",
-  "host_name" : "sonarqube",
+  "host_name": "sonarqube",
   "sonarqube_chart_version": "",
   "alb_controller_chart_version": "",
   "db_name": "sonarqube",
-  "db_username": "sonarqube"
+  "db_username": "sonarqube",
+  "enable_vortex_analysis": true,
+  "enable_hunter_agent": true,
+  "enable_remediation_agent": true,
+  "agentic_bucket_name": "",
+  "agent_egress_allowed_domains": [
+    "api.anthropic.com"
+  ],
+  "agent_node_instance_types": [
+    "m6i.xlarge"
+  ],
+  "agent_node_desired_size": 1,
+  "gvisor_installer_enabled": true
 }
