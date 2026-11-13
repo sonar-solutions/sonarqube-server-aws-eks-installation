@@ -136,7 +136,7 @@ This deployment method is production-ready and includes all necessary components
 - `agentic_bucket_name`: S3 bucket for agentic storage (default: `<cluster_name>-agentic-<account_id>`)
 - `agent_egress_allowed_domains`: Hostnames the agent runtimes may reach, i.e. your LLM provider API (default: `["bedrock-runtime.eu-central-1.amazonaws.com"]`). The S3 bucket hostname is added automatically, and with `enable_bedrock` the Bedrock Runtime and STS hostnames too
 - `enable_bedrock`: Grant SonarQube Server and the agent runtimes the IAM permissions to invoke Amazon Bedrock, and allow Bedrock through the egress proxy (default: `true`). See [Amazon Bedrock](#amazon-bedrock)
-- `bedrock_region`: Region of the AWS Bedrock LLM provider registered in SonarQube (default: `"eu-central-1"`)
+- `bedrock_regions`: Regions of the AWS Bedrock LLM providers registered in SonarQube, one region per provider (default: `["eu-central-1", "us-east-1"]`)
 - `agent_node_instance_types`: Instance types for the agent runtime node group (default: `["m6i.xlarge"]`)
 - `agent_node_desired_size`: Number of agent runtime nodes (default: `1`)
 - `gvisor_installer_enabled`: Install gVisor with the chart's privileged DaemonSet (default: `true`). See [Sandbox runtime](#sandbox-runtime)
@@ -194,13 +194,16 @@ or `["bedrock-runtime.eu-central-1.amazonaws.com"]` for Amazon Bedrock (the defa
 
 With `enable_bedrock` (the default), the template prepares the **AWS Bedrock** LLM provider type, which authenticates with the pods' AWS identity instead of an API key:
 
-- A policy allowing only `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`, on the inference profiles of `bedrock_region` and on foundation models in any region. Models are often only offered through cross-region inference profiles (`eu.*`, `global.*`), which serve requests from other regions.
+- A policy allowing only `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`, on the inference profiles of each region in `bedrock_regions` and on foundation models in any region. Models are often only offered through cross-region inference profiles (`eu.*`, `us.*`, `global.*`), which serve requests from other regions.
 - That policy is attached to SonarQube Server's role, which checks the region and model when you select one, and to a Bedrock-only role for the Hunter and Remediation Agent runtimes, which call the models during jobs.
-- The egress proxy allows `bedrock-runtime.<bedrock_region>.amazonaws.com` and `sts.<aws_region>.amazonaws.com`. The agents need STS to exchange their ServiceAccount token for AWS credentials.
+- The egress proxy allows `bedrock-runtime.<region>.amazonaws.com` for each region in `bedrock_regions`, and `sts.<aws_region>.amazonaws.com`. The agents need STS to exchange their ServiceAccount token for AWS credentials.
 
-Then register the provider in SonarQube: **Administration > Configuration > AI Capabilities > LLM Providers**, type **AWS Bedrock**, region `eu-central-1`. Select a model by its inference profile ID, for example `eu.anthropic.claude-sonnet-4-6`.
+Then register the provider in SonarQube: **Administration > Configuration > AI Capabilities > LLM Providers**, type **AWS Bedrock**, with one of the `bedrock_regions`, for example `us-east-1`. Select a model by its regional inference profile ID, for example `us.anthropic.claude-opus-4-8`.
 
-Model access must be enabled for the account in the Bedrock console. A cross-region inference profile also needs every destination region to be allowed: if a service control policy (SCP) restricts your accounts to some regions, calls fail with `AccessDeniedException ... explicit deny in a service control policy`, whatever the IAM permissions. Ask your AWS organization administrators to allow Bedrock invocation in the profile's destination regions.
+Before the agents can use a model, check two things in the AWS account:
+
+- **The model has been invoked once by a user with AWS Marketplace permissions.** Bedrock enables serverless models automatically on their first invocation, but for models served from AWS Marketplace, including the Anthropic models, that first invocation must come from a user with Marketplace permissions. It then enables the model account-wide. For Anthropic models, first-time users may also need to submit use case details. Opening the model in the Bedrock playground once is enough. Until then, the agents' calls fail with `AccessDeniedException: ... not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe)`. The template deliberately grants no Marketplace permissions, so the agents cannot subscribe the account to models.
+- **Service control policies (SCPs) allow the regions the inference profile routes to.** A regional profile (`us.*`, `eu.*`) serves requests from several regions in its geography, and a global profile (`global.*`) from a model ARN with no region. If an SCP denies any of them, calls fail with `AccessDeniedException ... explicit deny in a service control policy`, whatever the IAM permissions. Ask your AWS organization administrators to allow Bedrock invocation in those regions, or use a profile whose destination regions are allowed.
 
 ### After `terraform apply`
 

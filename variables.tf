@@ -212,11 +212,16 @@ variable "enable_bedrock" {
   default     = true
 }
 
-# Region registered for the AWS Bedrock provider in SonarQube
-variable "bedrock_region" {
-  description = "AWS region of the AWS Bedrock LLM provider registered in SonarQube. Models in this region are reached through its Bedrock Runtime endpoint, including cross-region inference profiles."
-  type        = string
-  default     = "eu-central-1"
+# Regions that may be registered for AWS Bedrock providers in SonarQube (one region per provider)
+variable "bedrock_regions" {
+  description = "AWS regions of the AWS Bedrock LLM providers registered in SonarQube. The agents can reach each region's Bedrock Runtime endpoint, and invoke its models and inference profiles."
+  type        = list(string)
+  default     = ["eu-central-1", "us-east-1"]
+
+  validation {
+    condition     = length(var.bedrock_regions) > 0
+    error_message = "bedrock_regions must list at least one region (set enable_bedrock to false to disable Bedrock)."
+  }
 }
 
 # Instance types for the dedicated, gVisor-sandboxed agent node group

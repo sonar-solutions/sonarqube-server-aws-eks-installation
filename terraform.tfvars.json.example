@@ -41,7 +41,10 @@
     "bedrock-runtime.eu-central-1.amazonaws.com"
   ],
   "enable_bedrock": true,
-  "bedrock_region": "eu-central-1",
+  "bedrock_regions": [
+    "eu-central-1",
+    "us-east-1"
+  ],
   "agent_node_instance_types": [
     "m6i.xlarge"
   ],

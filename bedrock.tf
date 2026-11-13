@@ -9,16 +9,24 @@ locals {
   agent_bedrock_enabled = local.bedrock_enabled && local.agents_enabled
 
   # The agent runtimes reach Bedrock through the egress proxy. They also need STS, to exchange
-  # their ServiceAccount token for AWS credentials (IRSA uses the regional STS endpoint).
-  bedrock_egress_domains = local.agent_bedrock_enabled ? [
-    "bedrock-runtime.${var.bedrock_region}.amazonaws.com",
-    "sts.${var.aws_region}.amazonaws.com",
-  ] : []
+  # their ServiceAccount token for AWS credentials: the SDK calls the regional STS endpoint of the
+  # region its client is created for, so allow STS in every Bedrock region and the cluster's own.
+  bedrock_egress_domains = local.agent_bedrock_enabled ? concat(
+    [for region in var.bedrock_regions : "bedrock-runtime.${region}.amazonaws.com"],
+    [for region in distinct(concat([var.aws_region], var.bedrock_regions)) : "sts.${region}.amazonaws.com"],
+  ) : []
+
+  bedrock_inference_profile_arns = flatten([
+    for region in var.bedrock_regions : [
+      "arn:aws:bedrock:${region}:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+      "arn:aws:bedrock:${region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+    ]
+  ])
 }
 
 # Invoke permissions only. Models in a region are often only offered through cross-region
-# inference profiles (eu.* / global.*), which serve requests from foundation models in other
-# regions, so the policy covers the profiles of bedrock_region and foundation models in any region.
+# inference profiles (eu.* / us.* / global.*), which serve requests from foundation models in other
+# regions, so the policy covers the profiles of bedrock_regions and foundation models in any region.
 resource "aws_iam_policy" "bedrock_invoke" {
   count       = local.bedrock_enabled ? 1 : 0
   name_prefix = "${var.cluster_name}-bedrock-"
@@ -34,11 +42,10 @@ resource "aws_iam_policy" "bedrock_invoke" {
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream"
         ]
-        Resource = [
-          "arn:aws:bedrock:*::foundation-model/*",
-          "arn:aws:bedrock:${var.bedrock_region}:${data.aws_caller_identity.current.account_id}:inference-profile/*",
-          "arn:aws:bedrock:${var.bedrock_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"
-        ]
+        Resource = concat(
+          ["arn:aws:bedrock:*::foundation-model/*"],
+          local.bedrock_inference_profile_arns
+        )
       }
     ]
   })
