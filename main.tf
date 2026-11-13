@@ -653,6 +653,9 @@ resource "kubernetes_service" "sonarqube_nlb" {
 
   spec {
     type = "LoadBalancer"
+    # Set explicitly: the AWS Load Balancer Controller's webhook adds it, and since the field is
+    # immutable, leaving it out makes every later plan replace this Service (and the NLB)
+    load_balancer_class = "service.k8s.aws/nlb"
     # Same selector as the chart's SonarQube Service
     selector = {
       app     = "sonarqube"

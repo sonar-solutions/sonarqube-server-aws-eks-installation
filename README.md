@@ -264,7 +264,7 @@ SSL/TLS certificate management:
 ### `route53.tf`
 DNS and certificate validation:
 - Route53 hosted zone lookup for existing domain
-- A record (alias) pointing to the NLB created by the AWS Load Balancer Controller
+- A record (alias) pointing to the NLB created by the AWS Load Balancer Controller, created only once the NLB is active and SonarQube is a healthy target (uses the AWS CLI), so resolvers never cache an empty answer for the hostname
 - ACM certificate validation records
 - Certificate validation resource to wait for DNS propagation
 
