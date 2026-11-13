@@ -621,6 +621,9 @@ resource "helm_release" "sonarqube" {
     kubernetes_storage_class.gp3,
     aws_iam_role_policy_attachment.ebs_csi_driver,
     aws_iam_role_policy_attachment.agentic_storage,
+    aws_iam_role_policy_attachment.sonarqube_server_storage,
+    aws_iam_role_policy_attachment.sonarqube_server_bedrock,
+    aws_iam_role_policy_attachment.agent_bedrock,
     aws_s3_bucket_policy.agentic,
     aws_vpc_endpoint.s3
   ]

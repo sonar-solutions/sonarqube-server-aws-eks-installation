@@ -38,8 +38,10 @@
   "enable_remediation_agent": true,
   "agentic_bucket_name": "",
   "agent_egress_allowed_domains": [
-    "api.anthropic.com"
+    "bedrock-runtime.eu-central-1.amazonaws.com"
   ],
+  "enable_bedrock": true,
+  "bedrock_region": "eu-central-1",
   "agent_node_instance_types": [
     "m6i.xlarge"
   ],

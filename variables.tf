@@ -200,9 +200,23 @@ variable "agentic_bucket_name" {
 # Prefer exact hostnames: an entry with a leading dot (.example.com) also allows every subdomain.
 # The proxy only allows ports 80 and 443.
 variable "agent_egress_allowed_domains" {
-  description = "Domains the agent runtimes may reach through the Agent Egress Proxy (your LLM provider API, e.g. api.anthropic.com or bedrock-runtime.<region>.amazonaws.com). The S3 bucket hostname is added automatically."
+  description = "Domains the agent runtimes may reach through the Agent Egress Proxy (your LLM provider API). The S3 bucket hostname is added automatically, and with enable_bedrock the Bedrock Runtime and STS hostnames too."
   type        = list(string)
-  default     = ["api.anthropic.com"]
+  default     = ["bedrock-runtime.eu-central-1.amazonaws.com"]
+}
+
+# Amazon Bedrock as the LLM provider ("AWS Bedrock" provider type in SonarQube)
+variable "enable_bedrock" {
+  description = "Grant SonarQube Server and the agent runtimes the IAM permissions to invoke Amazon Bedrock models (bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream), and allow the Bedrock Runtime and STS hostnames through the egress proxy."
+  type        = bool
+  default     = true
+}
+
+# Region registered for the AWS Bedrock provider in SonarQube
+variable "bedrock_region" {
+  description = "AWS region of the AWS Bedrock LLM provider registered in SonarQube. Models in this region are reached through its Bedrock Runtime endpoint, including cross-region inference profiles."
+  type        = string
+  default     = "eu-central-1"
 }
 
 # Instance types for the dedicated, gVisor-sandboxed agent node group

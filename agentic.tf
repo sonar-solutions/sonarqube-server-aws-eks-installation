@@ -16,11 +16,13 @@ locals {
   # Virtual-hosted-style hostname used by the presigned URLs the agent runtimes download through the egress proxy
   agentic_bucket_host = "${local.agentic_bucket_name}.s3.${var.aws_region}.amazonaws.com"
 
-  # ServiceAccounts that access the bucket with their IAM identity (IRSA).
-  # The agent runtimes only use presigned URLs and keep their own, role-less ServiceAccounts.
+  # ServiceAccounts with an IAM identity (IRSA). SonarQube, the Agent Orchestrator and Vortex access
+  # the bucket; the agent runtimes only use presigned URLs for it, and get a Bedrock-only role (bedrock.tf).
   sonarqube_service_account          = "sonarqube-server"
   agent_orchestrator_service_account = "sonarqube-agent-orchestrator"
   vortex_service_account             = "sonarqube-vortex"
+  hunter_agent_service_account       = "sonarqube-agent-hunter"
+  remediation_agent_service_account  = "sonarqube-agent-remediation"
 
   # Label and taint of the dedicated node group running the sandboxed agent runtimes
   agent_node_label_key = "sonarqube.org/agent-runtime"
@@ -42,6 +44,29 @@ locals {
   agentic_irsa_annotations = local.agentic_enabled ? {
     "eks.amazonaws.com/role-arn" = aws_iam_role.agentic_storage[0].arn
   } : {}
+  sonarqube_irsa_annotations = local.agentic_enabled ? {
+    "eks.amazonaws.com/role-arn" = aws_iam_role.sonarqube_server[0].arn
+  } : {}
+  agent_irsa_annotations = local.agent_bedrock_enabled ? {
+    "eks.amazonaws.com/role-arn" = aws_iam_role.agent_bedrock[0].arn
+  } : {}
+
+  # IRSA credentials are injected when a pod starts, so put the role ARN in the pod template:
+  # a role change then restarts the pods instead of leaving them on the old role
+  sonarqube_pod_annotations = { for k, v in local.sonarqube_irsa_annotations : "sonarqube.org/iam-role" => v }
+  agent_pod_annotations     = { for k, v in local.agent_irsa_annotations : "sonarqube.org/iam-role" => v }
+
+  # The agent node group is sized for one replica of each runtime (Hunter alone requests 8Gi), so
+  # replace pods in place: the default surge would start a second Hunter pod that never fits
+  agent_rollout_strategy = {
+    type = "RollingUpdate"
+    rollingUpdate = {
+      maxSurge       = 0
+      maxUnavailable = 1
+    }
+  }
+
+  agent_egress_allowed_domains = distinct(concat(var.agent_egress_allowed_domains, [local.agentic_bucket_host], local.bedrock_egress_domains))
 
   # Extra Helm values for the SonarQube release, empty when no agentic component is enabled
   agentic_helm_values = local.agentic_enabled ? [
@@ -56,8 +81,9 @@ locals {
         create         = true
         name           = local.sonarqube_service_account
         automountToken = true
-        annotations    = local.agentic_irsa_annotations
+        annotations    = local.sonarqube_irsa_annotations
       }
+      annotations = local.sonarqube_pod_annotations
       agenticSigningSecret = {
         existingSecret = local.agentic_signing_secret_name
         key            = local.agentic_signing_secret_key
@@ -91,14 +117,26 @@ locals {
         }
       }
       hunterAgent = {
-        nodeSelector   = local.agent_node_labels
-        tolerations    = local.agent_tolerations
-        serviceAccount = { create = true }
+        nodeSelector = local.agent_node_labels
+        tolerations  = local.agent_tolerations
+        annotations  = local.agent_pod_annotations
+        strategy     = local.agent_rollout_strategy
+        serviceAccount = {
+          create      = true
+          name        = local.hunter_agent_service_account
+          annotations = local.agent_irsa_annotations
+        }
       }
       remediationAgent = {
-        nodeSelector   = local.agent_node_labels
-        tolerations    = local.agent_tolerations
-        serviceAccount = { create = true }
+        nodeSelector = local.agent_node_labels
+        tolerations  = local.agent_tolerations
+        annotations  = local.agent_pod_annotations
+        strategy     = local.agent_rollout_strategy
+        serviceAccount = {
+          create      = true
+          name        = local.remediation_agent_service_account
+          annotations = local.agent_irsa_annotations
+        }
       }
       # gVisor sandbox for the agent runtimes, installed only on the agent node group
       gvisor = {
@@ -110,7 +148,7 @@ locals {
       }
       # The only way out of the cluster for the agent runtimes
       agentEgressProxy = {
-        allowedDomains = distinct(concat(var.agent_egress_allowed_domains, [local.agentic_bucket_host]))
+        allowedDomains = local.agent_egress_allowed_domains
         # Own ServiceAccount so the proxy does not inherit SonarQube's IAM role
         serviceAccount = { create = true }
       }
@@ -230,7 +268,8 @@ resource "aws_vpc_endpoint" "s3" {
 }
 
 # ---------------------------------------------------------------------------
-# IRSA: IAM role giving SonarQube, the Agent Orchestrator and Vortex access to the bucket
+# IRSA: IAM roles giving SonarQube, the Agent Orchestrator and Vortex access to the bucket.
+# SonarQube has its own role, as it also needs Bedrock access (bedrock.tf).
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_policy" "agentic_storage" {
@@ -291,7 +330,6 @@ resource "aws_iam_role" "agentic_storage" {
           StringEquals = {
             "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:sub" = [
               for sa in [
-                local.sonarqube_service_account,
                 local.agent_orchestrator_service_account,
                 local.vortex_service_account
               ] : "system:serviceaccount:${local.sonarqube_namespace}:${sa}"
@@ -314,6 +352,45 @@ resource "aws_iam_role_policy_attachment" "agentic_storage" {
   count      = local.agentic_enabled ? 1 : 0
   policy_arn = aws_iam_policy.agentic_storage[0].arn
   role       = aws_iam_role.agentic_storage[0].name
+}
+
+# SonarQube Server: bucket access, plus Bedrock (bedrock.tf) to verify the models it is configured with
+resource "aws_iam_role" "sonarqube_server" {
+  count                = local.agentic_enabled ? 1 : 0
+  name_prefix          = "${var.cluster_name}-sonarqube-"
+  path                 = var.role_path != "" ? var.role_path : "/"
+  permissions_boundary = var.iam_permissions_boundary != "" ? var.iam_permissions_boundary : null
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Effect = "Allow"
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+        Condition = {
+          StringEquals = {
+            "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:sub" = "system:serviceaccount:${local.sonarqube_namespace}:${local.sonarqube_service_account}"
+            "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.cluster_name}-sonarqube-role"
+    Environment = var.environment
+    Owner       = var.owner_tag
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "sonarqube_server_storage" {
+  count      = local.agentic_enabled ? 1 : 0
+  policy_arn = aws_iam_policy.agentic_storage[0].arn
+  role       = aws_iam_role.sonarqube_server[0].name
 }
 
 # ---------------------------------------------------------------------------
@@ -362,6 +439,12 @@ output "agentic_storage_role_arn" {
 
 output "agent_egress_allowed_domains" {
   description = "Domains the agent runtimes may reach through the Agent Egress Proxy"
-  value       = local.agentic_enabled ? distinct(concat(var.agent_egress_allowed_domains, [local.agentic_bucket_host])) : []
+  value       = local.agentic_enabled ? local.agent_egress_allowed_domains : []
+  sensitive   = false
+}
+
+output "sonarqube_server_role_arn" {
+  description = "ARN of the IRSA role used by SonarQube Server (agentic bucket and, with enable_bedrock, Bedrock)"
+  value       = local.agentic_enabled ? aws_iam_role.sonarqube_server[0].arn : null
   sensitive   = false
 }
