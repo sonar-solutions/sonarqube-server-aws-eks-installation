@@ -11,12 +11,33 @@ data "aws_route53_zone" "existing" {
 # Data source to get the NLB created by the AWS Load Balancer Controller
 data "aws_lb" "sonarqube_nlb" {
   depends_on = [
-    helm_release.sonarqube
+    kubernetes_service.sonarqube_nlb
   ]
 
   tags = {
     "service.k8s.aws/resource" = "LoadBalancer"
-    "service.k8s.aws/stack"    = "default/sonarqube-sonarqube"
+    "service.k8s.aws/stack"    = "default/sonarqube-nlb"
+  }
+}
+
+# Wait until the NLB is active and SonarQube is a healthy target before publishing DNS.
+# While the NLB is still provisioning its DNS name does not resolve, so an alias created
+# earlier answers with no address, and resolvers cache that empty answer for up to 15 minutes.
+resource "terraform_data" "wait_for_sonarqube_nlb" {
+  triggers_replace = [data.aws_lb.sonarqube_nlb.arn]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      set -e
+      aws elbv2 wait load-balancer-available --region "$REGION" --load-balancer-arns "$LB_ARN"
+      for tg in $(aws elbv2 describe-target-groups --region "$REGION" --load-balancer-arn "$LB_ARN" --query 'TargetGroups[].TargetGroupArn' --output text); do
+        aws elbv2 wait target-in-service --region "$REGION" --target-group-arn "$tg"
+      done
+    EOT
+    environment = {
+      REGION = var.aws_region
+      LB_ARN = data.aws_lb.sonarqube_nlb.arn
+    }
   }
 }
 
@@ -33,7 +54,7 @@ resource "aws_route53_record" "sonarqube" {
   }
 
   depends_on = [
-    data.aws_lb.sonarqube_nlb
+    terraform_data.wait_for_sonarqube_nlb
   ]
 }
 

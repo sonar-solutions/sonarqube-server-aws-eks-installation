@@ -48,7 +48,10 @@ resource "aws_security_group" "rds" {
 # RDS Instance
 resource "aws_db_instance" "sonarqube" {
   engine = "postgres"
-  engine_version = "17.6"
+  # Major version only: RDS picks its current default minor version and auto-upgrades minors,
+  # so the template keeps working when AWS retires old minor versions (e.g. 17.6)
+  engine_version = "17"
+  auto_minor_version_upgrade = true
   instance_class = "db.t3.medium"
   allocated_storage = 100
   max_allocated_storage = 1000

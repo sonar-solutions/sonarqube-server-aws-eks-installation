@@ -179,10 +179,49 @@ variable "agentic_bucket_name" {
 
 # Hostnames the sandboxed agent runtimes may reach through the egress proxy.
 # The agentic S3 bucket hostname is always added automatically.
+#
+# List the hostname of the LLM provider registered in SonarQube
+# (Administration > Configuration > AI Capabilities > LLM Providers).
+# Supported provider types and the hostname to allow
+# (see https://docs.sonarsource.com/sonarqube-server/instance-administration/ai-features/llm-providers):
+#
+#   Anthropic           api.anthropic.com
+#   OpenAI              api.openai.com
+#   Azure AI Foundry    your Azure resource endpoint host, e.g. <resource>.openai.azure.com or
+#                       <resource>.services.ai.azure.com; through API Management, <apim-name>.azure-api.net
+#   AWS Bedrock         bedrock-runtime.<region>.amazonaws.com
+#                       The agents authenticate with an AWS identity, not an API key, and the agent runtimes
+#                       get no IAM role in this template. Grant them one with bedrock:InvokeModel and
+#                       bedrock:InvokeModelWithResponseStream, and with IRSA also allow sts.<region>.amazonaws.com.
+#   AWS Bedrock Mantle  bedrock-mantle.<region>.api.aws (OpenAI-compatible; works with a Bedrock API key)
+#   Custom              your OpenAI-compatible endpoint or AI gateway host, e.g.
+#                       api.portkey.ai (Portkey), openrouter.ai (OpenRouter), or a self-hosted gateway such as LiteLLM
+#
+# Prefer exact hostnames: an entry with a leading dot (.example.com) also allows every subdomain.
+# The proxy only allows ports 80 and 443.
 variable "agent_egress_allowed_domains" {
-  description = "Domains the agent runtimes may reach through the Agent Egress Proxy (your LLM provider API, e.g. api.anthropic.com or bedrock-runtime.<region>.amazonaws.com). The S3 bucket hostname is added automatically."
+  description = "Domains the agent runtimes may reach through the Agent Egress Proxy (your LLM provider API). The S3 bucket hostname is added automatically, and with enable_bedrock the Bedrock Runtime and STS hostnames too."
   type        = list(string)
-  default     = ["api.anthropic.com"]
+  default     = ["bedrock-runtime.eu-central-1.amazonaws.com"]
+}
+
+# Amazon Bedrock as the LLM provider ("AWS Bedrock" provider type in SonarQube)
+variable "enable_bedrock" {
+  description = "Grant SonarQube Server and the agent runtimes the IAM permissions to invoke Amazon Bedrock models (bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream), and allow the Bedrock Runtime and STS hostnames through the egress proxy."
+  type        = bool
+  default     = true
+}
+
+# Regions that may be registered for AWS Bedrock providers in SonarQube (one region per provider)
+variable "bedrock_regions" {
+  description = "AWS regions of the AWS Bedrock LLM providers registered in SonarQube. The agents can reach each region's Bedrock Runtime endpoint, and invoke its models and inference profiles."
+  type        = list(string)
+  default     = ["eu-central-1", "us-east-1"]
+
+  validation {
+    condition     = length(var.bedrock_regions) > 0
+    error_message = "bedrock_regions must list at least one region (set enable_bedrock to false to disable Bedrock)."
+  }
 }
 
 # Instance types for the dedicated, gVisor-sandboxed agent node group

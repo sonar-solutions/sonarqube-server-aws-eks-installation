@@ -281,6 +281,12 @@ module "eks" {
       before_compute = true
       resolve_conflicts_on_update = "OVERWRITE"
     }
+    # Provisions EBS volumes for PersistentVolumeClaims (see ebs-csi.tf)
+    aws-ebs-csi-driver = {
+      most_recent = true
+      resolve_conflicts_on_update = "OVERWRITE"
+      service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
+    }
     #depends_on = [module.vpc]
   }
   
@@ -584,24 +590,22 @@ resource "helm_release" "sonarqube" {
       remediationAgent = {
         enabled = var.enable_remediation_agent
       }
+      # MCP server SonarQube Server reports in its system status
+      mcp = {
+        enabled = true
+        persistence = {
+          storageClass = kubernetes_storage_class.gp3.metadata[0].name
+        }
+      }
       ingress = {
         enabled = false
       }
+      # Keep the chart's Service on the default ClusterIP port 9000: in-cluster clients such as the
+      # MCP server call http://sonarqube-sonarqube:<internalPort>. The NLB is a separate Service below.
       service = {
-        type         = "LoadBalancer"
-        externalPort = 443
+        type         = "ClusterIP"
+        externalPort = 9000
         internalPort = 9000
-        annotations = {
-          "service.beta.kubernetes.io/aws-load-balancer-type"                 = "external"
-          "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"      = "ip"
-          "service.beta.kubernetes.io/aws-load-balancer-scheme"               = "internet-facing"
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"             = aws_acm_certificate.sonarqube.arn
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"            = "443"
-          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"     = "http"
-          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"     = "/api/system/status"
-          "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol" = "HTTP"
-          "service.beta.kubernetes.io/aws-load-balancer-success-codes"        = "200"
-        }
       }
     })
   ], local.agentic_helm_values)
@@ -614,7 +618,12 @@ resource "helm_release" "sonarqube" {
     kubernetes_secret.sonarqube_monitoring_password,
     kubernetes_secret.sonarqube_settings_encryption_key,
     kubernetes_secret.agentic_instance_secret,
+    kubernetes_storage_class.gp3,
+    aws_iam_role_policy_attachment.ebs_csi_driver,
     aws_iam_role_policy_attachment.agentic_storage,
+    aws_iam_role_policy_attachment.sonarqube_server_storage,
+    aws_iam_role_policy_attachment.sonarqube_server_bedrock,
+    aws_iam_role_policy_attachment.agent_bedrock,
     aws_s3_bucket_policy.agentic,
     aws_vpc_endpoint.s3
   ]
@@ -624,6 +633,49 @@ resource "helm_release" "sonarqube" {
   wait          = true
   wait_for_jobs = true
   timeout       = 1500
+}
+
+# Internet-facing NLB for SonarQube: TLS 443 (ACM certificate) forwarded to the pod on port 9000.
+# Separate from the chart's Service so that one can stay on port 9000 for in-cluster clients.
+resource "kubernetes_service" "sonarqube_nlb" {
+  metadata {
+    name      = "sonarqube-nlb"
+    namespace = "default"
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-type"                 = "external"
+      "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type"      = "ip"
+      "service.beta.kubernetes.io/aws-load-balancer-scheme"               = "internet-facing"
+      "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"             = aws_acm_certificate.sonarqube.arn
+      "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"            = "443"
+      "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"     = "http"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"     = "/api/system/status"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol" = "HTTP"
+      "service.beta.kubernetes.io/aws-load-balancer-success-codes"        = "200"
+    }
+  }
+
+  spec {
+    type = "LoadBalancer"
+    # Set explicitly: the AWS Load Balancer Controller's webhook adds it, and since the field is
+    # immutable, leaving it out makes every later plan replace this Service (and the NLB)
+    load_balancer_class = "service.k8s.aws/nlb"
+    # Same selector as the chart's SonarQube Service
+    selector = {
+      app     = "sonarqube"
+      release = helm_release.sonarqube.name
+    }
+    port {
+      name        = "https"
+      port        = 443
+      target_port = 9000
+      protocol    = "TCP"
+    }
+  }
+
+  depends_on = [
+    helm_release.aws_load_balancer_controller,
+    aws_acm_certificate_validation.sonarqube
+  ]
 }
 
 output "sonarqube_url" {

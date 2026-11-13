@@ -134,7 +134,9 @@ This deployment method is production-ready and includes all necessary components
   - Leave empty if not required by your organization
 - `enable_vortex_analysis`, `enable_hunter_agent`, `enable_remediation_agent`: Deploy the agentic components (default: `true`). See [Agentic features](#-agentic-features-vortex-hunter-agent-remediation-agent)
 - `agentic_bucket_name`: S3 bucket for agentic storage (default: `<cluster_name>-agentic-<account_id>`)
-- `agent_egress_allowed_domains`: Hostnames the agent runtimes may reach, i.e. your LLM provider API (default: `["api.anthropic.com"]`). The S3 bucket hostname is added automatically
+- `agent_egress_allowed_domains`: Hostnames the agent runtimes may reach, i.e. your LLM provider API (default: `["bedrock-runtime.eu-central-1.amazonaws.com"]`). The S3 bucket hostname is added automatically, and with `enable_bedrock` the Bedrock Runtime and STS hostnames too
+- `enable_bedrock`: Grant SonarQube Server and the agent runtimes the IAM permissions to invoke Amazon Bedrock, and allow Bedrock through the egress proxy (default: `true`). See [Amazon Bedrock](#amazon-bedrock)
+- `bedrock_regions`: Regions of the AWS Bedrock LLM providers registered in SonarQube, one region per provider (default: `["eu-central-1", "us-east-1"]`)
 - `agent_node_instance_types`: Instance types for the agent runtime node group (default: `["m6i.xlarge"]`)
 - `agent_node_desired_size`: Number of agent runtime nodes (default: `1`)
 - `gvisor_installer_enabled`: Install gVisor with the chart's privileged DaemonSet (default: `true`). See [Sandbox runtime](#sandbox-runtime)
@@ -159,7 +161,13 @@ SonarQube Server 2026.5+ can run AI agents next to the server. This template dep
 
 - **S3 bucket** shared by SonarQube (agent job logs), the Agent Orchestrator (job artifacts) and Vortex (analysis context). It is private, encrypted (SSE-S3), TLS-only, and has a lifecycle rule that aborts incomplete multipart uploads. Artifact retention is managed in SonarQube (**General Settings > Housekeeping > Agentic**, 30 days by default).
 - **S3 gateway VPC endpoint**, so bucket traffic from the private subnets doesn't go through the NAT gateways.
-- **IRSA role** (honours `role_path`, `policy_path` and `iam_permissions_boundary`) with read/write access to the bucket. It is trusted only by the `sonarqube-server`, `sonarqube-agent-orchestrator` and `sonarqube-vortex` ServiceAccounts. The agent runtimes and the egress proxy get their own ServiceAccounts without an IAM role: the agents use presigned URLs.
+- **IRSA roles** (honouring `role_path`, `policy_path` and `iam_permissions_boundary`), one per kind of workload:
+  - `sonarqube-server` ServiceAccount: read/write access to the bucket, plus Bedrock invoke with `enable_bedrock`
+  - `sonarqube-agent-orchestrator` and `sonarqube-vortex` ServiceAccounts: read/write access to the bucket
+  - `sonarqube-agent-hunter` and `sonarqube-agent-remediation` ServiceAccounts: Bedrock invoke only, with `enable_bedrock` (`bedrock.tf`). They reach the bucket through presigned URLs, never with IAM
+  - The egress proxy gets its own ServiceAccount without an IAM role
+
+  Each pod template carries its role ARN as an annotation, so a role change restarts the pods that use it.
 - **Agentic signing secret** (`agentic-instance-secret`). Every component's signing keys are derived from it.
 - **Settings encryption key** (`sonarqube-settings-encryption-key`, mounted as `sonar.secretKeyPath`). It encrypts secrets such as the LLM provider API key, and the Agent Orchestrator receives a copy. Don't rotate it once secrets are stored.
 - **Agent runtime node group**: dedicated nodes with a 100 GiB root volume, labeled and tainted `sonarqube.org/agent-runtime=true:NoSchedule`, so only the sandboxed agents run there.
@@ -180,7 +188,22 @@ The agent runtimes reach the internet only through the Agent Egress Proxy, which
 "agent_egress_allowed_domains": ["api.anthropic.com"]
 ```
 
-or `["bedrock-runtime.eu-central-1.amazonaws.com"]` for Amazon Bedrock. The Agent Orchestrator clones repositories and opens pull requests itself, so the DevOps platform doesn't need to be listed.
+or `["bedrock-runtime.eu-central-1.amazonaws.com"]` for Amazon Bedrock (the default). The Agent Orchestrator clones repositories and opens pull requests itself, so the DevOps platform doesn't need to be listed.
+
+### Amazon Bedrock
+
+With `enable_bedrock` (the default), the template prepares the **AWS Bedrock** LLM provider type, which authenticates with the pods' AWS identity instead of an API key:
+
+- A policy allowing only `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`, on the inference profiles of each region in `bedrock_regions` and on foundation models in any region. Models are often only offered through cross-region inference profiles (`eu.*`, `us.*`, `global.*`), which serve requests from other regions.
+- That policy is attached to SonarQube Server's role, which checks the region and model when you select one, and to a Bedrock-only role for the Hunter and Remediation Agent runtimes, which call the models during jobs.
+- The egress proxy allows `bedrock-runtime.<region>.amazonaws.com` for each region in `bedrock_regions`, and `sts.<aws_region>.amazonaws.com`. The agents need STS to exchange their ServiceAccount token for AWS credentials.
+
+Then register the provider in SonarQube: **Administration > Configuration > AI Capabilities > LLM Providers**, type **AWS Bedrock**, with one of the `bedrock_regions`, for example `us-east-1`. Select a model by its regional inference profile ID, for example `us.anthropic.claude-opus-4-8`.
+
+Before the agents can use a model, check two things in the AWS account:
+
+- **The model has been invoked once by a user with AWS Marketplace permissions.** Bedrock enables serverless models automatically on their first invocation, but for models served from AWS Marketplace, including the Anthropic models, that first invocation must come from a user with Marketplace permissions. It then enables the model account-wide. For Anthropic models, first-time users may also need to submit use case details. Opening the model in the Bedrock playground once is enough. Until then, the agents' calls fail with `AccessDeniedException: ... not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe)`. The template deliberately grants no Marketplace permissions, so the agents cannot subscribe the account to models.
+- **Service control policies (SCPs) allow the regions the inference profile routes to.** A regional profile (`us.*`, `eu.*`) serves requests from several regions in its geography, and a global profile (`global.*`) from a model ARN with no region. If an SCP denies any of them, calls fail with `AccessDeniedException ... explicit deny in a service control policy`, whatever the IAM permissions. Ask your AWS organization administrators to allow Bedrock invocation in those regions, or use a profile whose destination regions are allowed.
 
 ### After `terraform apply`
 
@@ -264,7 +287,7 @@ SSL/TLS certificate management:
 ### `route53.tf`
 DNS and certificate validation:
 - Route53 hosted zone lookup for existing domain
-- A record (alias) pointing to the NLB created by the AWS Load Balancer Controller
+- A record (alias) pointing to the NLB created by the AWS Load Balancer Controller, created only once the NLB is active and SonarQube is a healthy target (uses the AWS CLI), so resolvers never cache an empty answer for the hostname
 - ACM certificate validation records
 - Certificate validation resource to wait for DNS propagation
 
@@ -293,10 +316,10 @@ DNS and certificate validation:
 
 ## 🧹 Tearing down
 
-Destroy the SonarQube Helm release first, while the AWS Load Balancer Controller is still running, so it deletes the NLB and security groups it created. Then destroy everything else:
+Destroy the SonarQube NLB Service (`sonarqube-nlb`) and Helm release first, while the AWS Load Balancer Controller is still running, so it deletes the NLB and security groups it created. Then destroy everything else:
 
 ```bash
-terraform destroy -target=aws_route53_record.sonarqube -target=helm_release.sonarqube
+terraform destroy -target=aws_route53_record.sonarqube -target=kubernetes_service.sonarqube_nlb -target=helm_release.sonarqube
 terraform destroy
 ```
 
