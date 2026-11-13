@@ -11,12 +11,12 @@ data "aws_route53_zone" "existing" {
 # Data source to get the NLB created by the AWS Load Balancer Controller
 data "aws_lb" "sonarqube_nlb" {
   depends_on = [
-    helm_release.sonarqube
+    kubernetes_service.sonarqube_nlb
   ]
 
   tags = {
     "service.k8s.aws/resource" = "LoadBalancer"
-    "service.k8s.aws/stack"    = "default/sonarqube-sonarqube"
+    "service.k8s.aws/stack"    = "default/sonarqube-nlb"
   }
 }
 

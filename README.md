@@ -293,10 +293,10 @@ DNS and certificate validation:
 
 ## 🧹 Tearing down
 
-Destroy the SonarQube Helm release first, while the AWS Load Balancer Controller is still running, so it deletes the NLB and security groups it created. Then destroy everything else:
+Destroy the SonarQube NLB Service (`sonarqube-nlb`) and Helm release first, while the AWS Load Balancer Controller is still running, so it deletes the NLB and security groups it created. Then destroy everything else:
 
 ```bash
-terraform destroy -target=aws_route53_record.sonarqube -target=helm_release.sonarqube
+terraform destroy -target=aws_route53_record.sonarqube -target=kubernetes_service.sonarqube_nlb -target=helm_release.sonarqube
 terraform destroy
 ```
 
